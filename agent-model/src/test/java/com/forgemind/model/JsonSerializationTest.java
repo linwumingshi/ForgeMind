@@ -2,6 +2,7 @@ package com.forgemind.model;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -65,6 +66,17 @@ class JsonSerializationTest {
         assertEquals("thinking", parsed.content());
         assertTrue(parsed.hasToolCalls());
         assertEquals("search", parsed.toolCalls().get(0).name());
+        assertNull(parsed.finishReason());
+    }
+
+    @Test
+    void agentResponseFinishReasonRoundTrip() throws Exception {
+        AgentResponse response = AgentResponse.withFinishReason("partial answer", null, "length");
+        String json = mapper.writeValueAsString(response);
+        assertTrue(json.contains("\"finishReason\":\"length\""));
+        AgentResponse parsed = mapper.readValue(json, AgentResponse.class);
+        assertEquals("length", parsed.finishReason());
+        assertEquals("partial answer", parsed.content());
     }
 
     @Test

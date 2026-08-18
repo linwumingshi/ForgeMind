@@ -17,13 +17,15 @@ import com.forgemind.tools.fs.EditFileTool;
 import com.forgemind.tools.fs.ListFilesTool;
 import com.forgemind.tools.fs.ReadFileTool;
 import com.forgemind.tools.fs.WriteFileTool;
+import com.forgemind.tools.git.GitDiffTool;
+import com.forgemind.tools.git.GitStatusTool;
 import com.forgemind.tools.search.SearchTool;
 import com.forgemind.tools.shell.ShellTool;
 import java.nio.file.Path;
 import java.util.List;
 
 /**
- * CLI 组合根装配：把配置、LLM、6 个 Tool、权限、围栏装配成可运行的 Agent。
+ * CLI 组合根装配：把配置、LLM、工具、权限、围栏装配成可运行的 Agent。
  * 工作目录始终经 {@link WorkspaceAccess} 围栏；权限始终经 ToolExecutor 链路，
  * CLI 不绕过任何安全检查。
  */
@@ -32,7 +34,7 @@ public final class CliAssembly {
     private CliAssembly() {
     }
 
-    /** 标准 6 个 Tool（M2 实现，M4 不新增）。 */
+    /** 标准工具集（M6 起 8 个：6 文件/搜索/shell + git_status/git_diff）。 */
     public static List<AgentTool> standardTools() {
         return List.of(
                 new ListFilesTool(),
@@ -40,7 +42,9 @@ public final class CliAssembly {
                 new WriteFileTool(),
                 new EditFileTool(),
                 new SearchTool(),
-                new ShellTool());
+                new ShellTool(),
+                new GitStatusTool(),
+                new GitDiffTool());
     }
 
     /**

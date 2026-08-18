@@ -22,8 +22,17 @@ class CliAssemblyTest {
     Path tempDir;
 
     @Test
-    void standardToolsContainSixTools() {
-        assertEquals(6, CliAssembly.standardTools().size());
+    void standardToolsContainEightTools() {
+        assertEquals(8, CliAssembly.standardTools().size());
+        var names = CliAssembly.standardTools().stream().map(com.forgemind.core.tool.AgentTool::name).toList();
+        assertTrue(names.contains("list_files"));
+        assertTrue(names.contains("read_file"));
+        assertTrue(names.contains("write_file"));
+        assertTrue(names.contains("edit_file"));
+        assertTrue(names.contains("search"));
+        assertTrue(names.contains("shell"));
+        assertTrue(names.contains("git_status"));
+        assertTrue(names.contains("git_diff"));
     }
 
     @Test

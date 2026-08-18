@@ -19,6 +19,7 @@ class AgentResponseTest {
         assertFalse(response.hasToolCalls());
         assertEquals("done", response.content());
         assertNull(response.toolCalls());
+        assertNull(response.finishReason());
     }
 
     @Test
@@ -27,6 +28,26 @@ class AgentResponseTest {
                 null, List.of(ToolCall.of("c1", "echo", java.util.Map.of())));
         assertTrue(response.hasToolCalls());
         assertFalse(response.isFinished());
+        assertNull(response.finishReason());
+    }
+
+    @Test
+    void finishReasonIsCarried() {
+        AgentResponse response = AgentResponse.withFinishReason("partial", null, "length");
+        assertFalse(response.hasToolCalls());
+        assertEquals("length", response.finishReason());
+    }
+
+    @Test
+    void legacyTwoArgConstructorKeepsNullFinishReason() {
+        AgentResponse response = new AgentResponse("x", null);
+        assertNull(response.finishReason());
+    }
+
+    @Test
+    void unknownFinishReasonIsKeptAsString() {
+        AgentResponse response = AgentResponse.withFinishReason("x", null, "weird_value");
+        assertEquals("weird_value", response.finishReason());
     }
 
     @Test

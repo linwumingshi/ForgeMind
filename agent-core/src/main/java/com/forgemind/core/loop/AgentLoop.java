@@ -8,6 +8,7 @@ import com.forgemind.core.exception.MaxIterationsExceededException;
 import com.forgemind.core.llm.LlmClient;
 import com.forgemind.core.tool.ToolExecutor;
 import com.forgemind.core.tool.ToolRegistry;
+import com.forgemind.core.tool.ToolResultRenderer;
 import com.forgemind.model.AgentResponse;
 import com.forgemind.model.AgentResult;
 import com.forgemind.model.ChatMessage;
@@ -83,7 +84,13 @@ public final class AgentLoop {
                 iterations++;
                 log.info("loop iteration {}/{}", iterations, config.maxIterations());
 
+                // M6：进入 LLM 前按字符预算压缩旧消息（0 = 禁用）
+                context.compactIfNeeded(config.contextMaxChars());
+
                 AgentResponse response = llm.chat(context.messages());
+                if (response != null && response.finishReason() != null) {
+                    log.info("finish_reason={}", response.finishReason());
+                }
 
                 if (response == null) {
                     consecutiveInvalid = onInvalidResponse(
@@ -115,7 +122,8 @@ public final class AgentLoop {
                     ToolResult result = executor.execute(call.name(), call.arguments());
                     log.info("tool '{}' -> success={} truncated={}",
                             call.name(), result.success(), result.truncated());
-                    context.appendMessage(ChatMessage.tool(call.id(), renderToolResult(result, call.name())));
+                    context.appendMessage(ChatMessage.tool(call.id(),
+                            ToolResultRenderer.render(result, call.name(), config.toolOutputLimit())));
                 }
             }
         } catch (AgentException e) {
@@ -174,26 +182,6 @@ public final class AgentLoop {
                 sb.append("- ").append(name).append(": ").append(tool.description()).append('\n'));
         sb.append("When you need to inspect or modify the codebase, call the appropriate tool. ")
                 .append("When the task is complete, reply with the final answer without tool calls.");
-        return sb.toString();
-    }
-
-    /**
-     * 把 ToolResult 渲染为回灌 LLM 的纯文本，完整保留元数据（tool name、success、
-     * exitCode、truncated）与正文（output / error）。tool_call_id 由
-     * {@link ChatMessage#toolCallId()} 携带，不拼入文本。
-     * shell 的 stdout/stderr（M2 起以 {@code [stderr]} 分节合并于 output）原样保留。
-     */
-    private static String renderToolResult(ToolResult result, String toolName) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("[tool: ").append(toolName).append("]\n");
-        sb.append("[success: ").append(result.success()).append("]\n");
-        sb.append("[exitCode: ").append(result.exitCode()).append("]\n");
-        sb.append("[truncated: ").append(result.truncated()).append("]\n");
-        if (result.success()) {
-            sb.append(result.output() == null ? "(no output)" : result.output());
-        } else {
-            sb.append("ERROR: ").append(result.error() == null ? "unknown error" : result.error());
-        }
         return sb.toString();
     }
 }

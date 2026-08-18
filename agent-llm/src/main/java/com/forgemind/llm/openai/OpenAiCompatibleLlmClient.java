@@ -199,8 +199,10 @@ public final class OpenAiCompatibleLlmClient implements LlmClient {
             throw new LlmException("LLM response contains no choices");
         }
         JsonNode choice = choices.get(0);
-        JsonNode finishReason = choice.get("finish_reason");
-        log.debug("finish_reason={}", finishReason == null || finishReason.isNull() ? "" : finishReason.asText());
+        JsonNode finishReasonNode = choice.get("finish_reason");
+        String finishReason = finishReasonNode == null || finishReasonNode.isNull()
+                ? null : finishReasonNode.asText();
+        log.debug("finish_reason={}", finishReason);
 
         JsonNode message = choice.get("message");
         if (message == null || message.isNull()) {
@@ -219,9 +221,9 @@ public final class OpenAiCompatibleLlmClient implements LlmClient {
                         ? "" : function.get("arguments").asText();
                 calls.add(ToolCall.of(id, name, parseArguments(argumentsJson, name)));
             }
-            return AgentResponse.withToolCalls(content, calls);
+            return AgentResponse.withFinishReason(content, calls, finishReason);
         }
-        return AgentResponse.finalAnswer(content);
+        return AgentResponse.withFinishReason(content, null, finishReason);
     }
 
     /** arguments 是 JSON 字符串；解析失败 → 空 Map（参数校验回灌 missing required → LLM 自纠）。 */

@@ -45,6 +45,14 @@ public final class AgentContext {
         return Collections.unmodifiableList(conversation);
     }
 
+    /**
+     * 若总字符数超过 {@code maxChars}，压缩旧消息（委托 {@link ContextCompactor}；
+     * {@code maxChars <= 0} 表示禁用）。内部列表仍由本类管理，外部不可直接修改。
+     */
+    public void compactIfNeeded(long maxChars) {
+        ContextCompactor.compact(conversation, maxChars);
+    }
+
     public int messageCount() {
         return conversation.size();
     }

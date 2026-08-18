@@ -976,4 +976,27 @@ MVP 阶段（本仓库第一阶段）              后续扩展（按价值排�
 
 ---
 
-*本文档为设计基线；进入编码阶段后，实现与设计的偏差需同步更新本文档并标注修订记录（见 §15–§19）。*
+## 20. M6 实现记录（Git 感知 + Context/Tool Output 管理 + finish_reason + Coding Flow）
+
+> M6 完成：git_status/git_diff（READ）、ToolResultRenderer（context 统一输出限制）、
+> ContextCompactor（字符预算压缩）、AgentResponse.finishReason、Coding Flow 闭环测试。
+
+| # | 设计点 | 为什么 / 方案 / 为什么不选其他 / 影响 | 测试 |
+|---|---|---|---|
+| R39 | **Git Tools**（git_status/git_diff，READ） | 需要 Git 感知而不把 git 当任意 shell 暴露。`GitProvider` 统一 `git -C <workspaceRoot>` 并**复用 ProcessRunner**（不重实现进程层）；git_diff 用 `--` 分隔符防 option injection，path 必须经 WorkspaceAccess 校验转相对路径；输出受 ToolLimits.outputLimit 限制。git_commit 暂缓（权限模型无独立 commit 权限）。影响：agent-cli standardTools 6→8 | GitStatusToolTest 6 + GitDiffToolTest 11（含非 git/越界/注入/大 diff/中文文件名） |
+| R40 | **ToolResultRenderer** | Tool 输出应统一受 context 层限制，且**不修改原始 ToolResult**（CLI/UI 未来可拿完整结果）。规则：Tool 已 truncated=true 不重复截断；否则正文超 toolOutputLimit 截断 + `[output truncated: context output limit]`。替代方案（改 Tool 自身/改 ToolResult 结构）被否：破坏 M2 语义。影响：AgentLoop 渲染从私有方法迁移至 renderer | ToolResultRendererTest 8（含已截断/Unicode/原始不可变） |
+| R41 | **ContextCompactor** | 长任务消息无界增长。粗字符预算（不引 tokenizer）；组划分：`ASSISTANT(tool_calls)+后续连续 TOOL` 原子组；SYSTEM 与最后组永删；tool_call_id 不孤裂；`maxChars<=0` 禁用；超预算剩受保护组时停止不抛。替代（滑动窗口/摘要）留 M7 | ContextCompactorTest 14（空列表/边界/原子删除/多轮/顺序） |
+| R42 | **AgentResponse.finishReason** | finish_reason 需进入模型供 AgentLoop 感知。新增组件 + 保留 2 参兼容构造 + 工厂默认 null；OpenAI 客户端解析 stop/tool_calls/length/未知值（String 保留，不用 enum） | AgentResponseTest + JsonSerializationTest + OpenAiCompatibleLlmClientTest（stop/tool_calls/length/未知） |
+| R43 | **AgentConfig 扩展** | contextMaxChars（默认 120k，0=禁用）+ toolOutputLimit（默认 64KB）；保留 `(int)` 与 `(int, ToolLimits)` 兼容构造；非法值校验。影响：旧测试零改动 | AgentConfigTest 4 |
+| R44 | **finish_reason=length** | 不视为异常：有 tool_calls → 照常执行；无 tool_calls + content 非空 → completed；无 tool_calls + content 空 → 走既有畸形计数（3 次 → AgentResult.failed，不裸抛）。替代（自动续写请求）留 M7（Context Summary） | AgentLoopFinishReasonTest 4 + llm 层 5 |
+| R45 | **Coding Flow 闭环** | status→read→edit→diff→final 真实多轮闭环（真实 git + 8 Tool + Fake LLM），断言真实文件修改、git diff 可见、tool_call_id 关联、消息序列；另验证 AgentLoop 真正调用 compaction 与 context 输出截断 | AgentLoopGitFlowTest 1 + AgentLoopContextCompactionTest 1 + AgentLoopToolOutputLimitTest 1 |
+
+### M6 行为记录
+
+- 集成测试确认：极小 contextMaxChars 下多轮大输出确实触发 `AgentLoop → compactIfNeeded → ContextCompactor`（末轮消息数 < 未压缩数，system 保留，tool_call_id 不孤裂）；
+- 超大 Tool 输出经 `ToolResult → ToolResultRenderer → ChatMessage.tool` 截断（`[truncated: true]` + 截断标记），后续轮次正常完成；
+- `mvn -o clean test / verify / package` 全部 BUILD SUCCESS（304 surefire + 5 failsafe = 309）。
+
+---
+
+*本文档为设计基线；进入编码阶段后，实现与设计的偏差需同步更新本文档并标注修订记录（见 §15–§20）。*

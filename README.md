@@ -2,9 +2,41 @@
 
 一个类似 Claude Code / Codex 的 Coding Agent：理解任务、分析代码库、调用工具（读/写/改文件、搜索、执行命令）、运行测试并迭代直到完成任务。
 
-> 当前进度：**M0–M5（安全脱敏 + CLI 可执行化 + Mock E2E）已完成**（245 个测试 + 5 个打包集成测试全绿），下一步为 M6+（Git/MCP/SubAgent 等）。
+> 当前进度：**M0–M6（Git 感知 + Context/Tool Output 管理 + Coding Flow）已完成**（304 个测试 + 5 个打包集成测试全绿），下一步为 M7+（git_commit/Token Budget/Streaming 等）。
 
-## Quick Start（M5，可复制执行）
+## Coding Agent 示例
+
+> "检查当前 Git 修改，分析 XXX 文件，修复问题并展示 diff" 已由
+> `AgentLoopGitFlowTest` 以真实 Git + 8 Tool 闭环验证：`git_status → read_file →
+> edit_file → git_diff → final answer`，真实文件被修改、diff 可见修改。
+
+```powershell
+.\forgemind.cmd --working-dir D:\workspace --yes "检查当前 Git 修改，分析 src\Bug.java，修复其中的 bug 并展示 diff"
+```
+
+## 模块结构（M6 更新）
+
+| 模块 | 职责 |
+|---|---|
+| `agent-model` | 纯数据模型：消息、Tool Call/Result、Schema、AgentResponse（含 finishReason）（无业务依赖，仅 Jackson） |
+| `agent-core` | 核心编排：Agent / AgentLoop（畸形阈值/完整回灌/Context 压缩触发）/ Tool SPI / Permission / WorkspaceAccess / 异常 / ToolLimits / LlmConfig / **ToolResultRenderer / ContextCompactor**（仅依赖 model + slf4j，无 Spring） |
+| `agent-llm` | FakeLlmClient + OpenAiCompatibleLlmClient（JDK HttpClient；解析 finish_reason） |
+| `agent-tools` | 8 个 AgentTool：list_files / read_file / write_file / edit_file / search / shell / **git_status / git_diff**（含 cmd/powershell provider、UTF-8/GBK 双解码、GitProvider） |
+| `agent-cli` | picocli CLI + 日志脱敏 + YAML 配置 + shade fat jar + 闭环/集成测试 |
+
+## Context / Tool Output 管理（M6）
+
+- **ToolResultRenderer**：所有 Tool 结果进入 LLM Context 前受 `toolOutputLimit`（默认 64KB）统一限制；Tool 已自截断（shell 等）不重复截断；**原始 ToolResult 始终完整保留**。
+- **ContextCompactor**：`contextMaxChars`（默认 120k，0=禁用）字符预算；`ASSISTANT(tool_calls)+TOOL` 原子组删除，SYSTEM 与最近消息永保，`tool_call_id` 不孤裂。
+
+## 测试（304 surefire + 5 failsafe，全绿）
+
+- agent-model：30 · agent-core：84（含 ToolResultRenderer 8 / ContextCompactor 14 / AgentConfig 4）
+- agent-llm：29（含 finish_reason 解析 5）
+- agent-tools：88（含 git_status 6 / git_diff 11）
+- agent-cli：73（含 GitFlow 闭环 / Context 压缩集成 / Tool Output 集成 / finish_reason 行为 4）
+
+## Quick Start（可复制执行）
 
 ### 1. 设置 API Key（绝不写入源码/配置/Git）
 

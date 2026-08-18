@@ -293,6 +293,52 @@ class OpenAiCompatibleLlmClientTest {
     }
 
     @Test
+    void finishReasonStopIsParsed() {
+        responseBody = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},"
+                + "\"finish_reason\":\"stop\"}]}";
+        AgentResponse response = client(config("k"), readFileTool()).chat(List.of(ChatMessage.user("q")));
+        assertEquals("stop", response.finishReason());
+    }
+
+    @Test
+    void finishReasonToolCallsIsParsed() {
+        responseBody = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":null,"
+                + "\"tool_calls\":[{\"id\":\"c1\",\"type\":\"function\","
+                + "\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]},"
+                + "\"finish_reason\":\"tool_calls\"}]}";
+        AgentResponse response = client(config("k"), readFileTool()).chat(List.of(ChatMessage.user("q")));
+        assertEquals("tool_calls", response.finishReason());
+        assertTrue(response.hasToolCalls());
+    }
+
+    @Test
+    void finishReasonLengthIsParsed() {
+        responseBody = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"partial\"},"
+                + "\"finish_reason\":\"length\"}]}";
+        AgentResponse response = client(config("k"), readFileTool()).chat(List.of(ChatMessage.user("q")));
+        assertEquals("length", response.finishReason());
+        assertEquals("partial", response.content());
+    }
+
+    @Test
+    void finishReasonLengthWithNullContent() {
+        responseBody = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":null},"
+                + "\"finish_reason\":\"length\"}]}";
+        AgentResponse response = client(config("k"), readFileTool()).chat(List.of(ChatMessage.user("q")));
+        assertEquals("length", response.finishReason());
+        assertNull(response.content());
+        assertFalse(response.hasToolCalls());
+    }
+
+    @Test
+    void unknownFinishReasonIsKept() {
+        responseBody = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"x\"},"
+                + "\"finish_reason\":\"weird_value\"}]}";
+        AgentResponse response = client(config("k"), readFileTool()).chat(List.of(ChatMessage.user("q")));
+        assertEquals("weird_value", response.finishReason());
+    }
+
+    @Test
     void providerNameIsOpenAiCompatible() {
         assertEquals("openai-compatible", client(config("k"), readFileTool()).provider());
     }
