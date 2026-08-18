@@ -26,12 +26,13 @@ public final class PolicyPermissionManager implements PermissionManager {
                 new HashMap<>(Objects.requireNonNull(overrides, "overrides")));
     }
 
-    /** 使用默认策略创建：READ=ALLOW，WRITE=ASK，SHELL=ASK。 */
+    /** 使用默认策略创建：READ=ALLOW，WRITE=ASK，SHELL=ASK，COMMIT=ASK。 */
     public static PolicyPermissionManager withDefaults() {
         Map<PermissionScope, PermissionDecision> defaults = new EnumMap<>(PermissionScope.class);
         defaults.put(PermissionScope.READ, PermissionDecision.ALLOW);
         defaults.put(PermissionScope.WRITE, PermissionDecision.ASK);
         defaults.put(PermissionScope.SHELL, PermissionDecision.ASK);
+        defaults.put(PermissionScope.COMMIT, PermissionDecision.ASK);
         return new PolicyPermissionManager(defaults, Map.of());
     }
 

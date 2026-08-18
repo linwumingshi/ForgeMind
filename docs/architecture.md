@@ -999,4 +999,33 @@ MVP 阶段（本仓库第一阶段）              后续扩展（按价值排�
 
 ---
 
-*本文档为设计基线；进入编码阶段后，实现与设计的偏差需同步更新本文档并标注修订记录（见 §15–§20）。*
+## 21. M7 实现记录（Token Context + Summary + 续写 + Retry + Git Commit）
+
+> M7 完成：Token-aware Context Budget、Deterministic Context Summary、finish_reason=length
+> 自动续写、HTTP 指数退避重试、git_commit + 独立 COMMIT 权限、完整 Coding Agent Commit 闭环。
+
+| # | 设计点 | 为什么 / 方案 / 为什么不选其他 / 影响 | 测试 |
+|---|---|---|---|
+| R46 | **ApproximateTokenEstimator** | 字符预算不反映 token 消耗。自研确定性近似（ASCII≈4 chars/token、CJK≈1.5 chars/token、消息/tool_call 结构开销），**不引入第三方 tokenizer**；明确文档标注"近似，非计费"。影响：纯新增，无既有 API 破坏 | TokenEstimatorTest 10 |
+| R47 | **Token Budget 配置** | `AgentConfig` + `contextMaxTokens`(100k)/`contextReserveTokens`(8k)/`maxContinuationAttempts`(2)；`usableContextTokens = max(0, max−reserve)`；reserve>max 且 max>0 → ConfigException；**token>0 优先，否则回退 M6 字符预算**（字符预算保留）；全部兼容构造保留 | AgentConfigTest 扩展 |
+| R48 | **ContextSummary** | 压缩丢弃历史导致丢状态。纯数据 record（model 层）含 task/facts/modifiedFiles/commands/testResults/pendingWork/decisions；`[CONTEXT SUMMARY]...[/CONTEXT SUMMARY]` SYSTEM 角色注入；不保存完整历史、无敏感信息 | ContextSummaryTest 6 |
+| R49 | **Deterministic Summary（不调 LLM）** | 从 USER task、assistant tool_calls 参数（write/edit 的 path、shell 的 command）、TOOL 消息（Tests run/BUILD）确定性提取；facts/pending/decisions 无法可靠确定 → 留空不编造 | DeterministicContextSummaryExtractorTest 7 |
+| R50 | **finish_reason=length 续写** | M6 直接 completed。M7：length+content → 保存 partialAnswer + 注入 continuation（USER，"Do not repeat completed content"）+ 继续请求；`maxContinuationAttempts` 上限（超限以最后 content 完成）；length+tool_calls → 先执行工具；length+空 content → 既有 invalid 机制；工具轮重置续写计数 | AgentLoopContinuationTest 8 + FinishReasonTest 更新 |
+| R51 | **RetryPolicy / Sleeper** | 仅重试 429/500/502/503/504（400/401/403/404/422 立即失败）；指数退避 500ms→5s ×2；jitter 默认开（测试可关）；`Sleeper.NOOP` 测试零等待；**只包 HTTP send 层**，不动请求构建/解析/SPI；超时/IO 不重试 | RetryPolicyTest 6 + Client retry 8 |
+| R52 | **COMMIT 权限** | `PermissionScope.COMMIT`（默认 ASK），不映射 SHELL/WRITE；`--yes` 仍只是 answerer 恒 true，必经 executor→permission 链 | PolicyPermissionManagerTest 扩展 + GitCommitToolTest 权限用例 |
+| R53 | **git_commit** | `git -C <root> add -A && git -C <root> commit -m <message>`（**add 与 commit 均为独立参数数组**，无 shell 拼接；message 注入 `; && $( ) |` 经测试验证仅作 message 文本）；返回 branch/hash/message；非 git/无变更 → failure | GitCommitToolTest 14（含注入/中文/多行/权限/外部 repo 不可达） |
+| R54 | **完整 Coding Agent Commit Flow** | status→read→edit→diff→commit→status→final（真实 git + 9 Tool + Fake LLM）：真实文件修改、commit 数+1、git log message 正确、最终 status clean、tool_call_id 完整；COMMIT DENY → failure 回灌 → 自纠不崩溃 | AgentLoopGitCommitFlowTest 2 + LongContext 2 + ContextSummary 集成 1 |
+
+### M7 实现与计划差异
+
+1. **git_commit 自动 staging**：原计划"只支持 `git commit -m`"——实测 Coding Flow 中 edit_file 只改工作区，直接 commit 报 `nothing to commit`；按"commit 工具承载 Coding Agent 语义"改为**先 `git add -A` 再 `git commit -m`**（两者均经 ProcessRunner 参数透传，无 shell），满足"edit→diff→commit→status clean"闭环（记录于 R53）。
+2. **ContextSummary 放 agent-model**（用户允许按分层自定）：纯数据放 model，提取器放 core.context。
+
+### M7 行为记录
+
+- 集成确认：`AgentLoop` 每轮 chat 前 token 预算（优先）→ `compactIfNeededTokens` → 删除旧组后注入 SYSTEM `[CONTEXT SUMMARY]`；原始 USER task 不被篡改；tool_call_id 全程无孤裂；
+- 371 surefire + 5 failsafe = 376 全绿；真实 LLM E2E 未执行（无 API Key），Retry/Continuation 均由本地 HttpServer / Fake LLM 验证。
+
+---
+
+*本文档为设计基线；进入编码阶段后，实现与设计的偏差需同步更新本文档并标注修订记录（见 §15–§21）。*

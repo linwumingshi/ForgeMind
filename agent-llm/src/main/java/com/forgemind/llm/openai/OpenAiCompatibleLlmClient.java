@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.forgemind.core.config.LlmConfig;
 import com.forgemind.core.exception.LlmException;
 import com.forgemind.core.llm.LlmClient;
+import com.forgemind.core.retry.RetryPolicy;
+import com.forgemind.core.retry.Sleeper;
 import com.forgemind.core.tool.AgentTool;
 import com.forgemind.model.AgentResponse;
 import com.forgemind.model.ChatMessage;
@@ -51,11 +53,20 @@ public final class OpenAiCompatibleLlmClient implements LlmClient {
     private final LlmConfig config;
     private final List<AgentTool> tools;
     private final HttpClient httpClient;
+    private final RetryPolicy retryPolicy;
+    private final Sleeper sleeper;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public OpenAiCompatibleLlmClient(LlmConfig config, List<AgentTool> tools) {
+        this(config, tools, new RetryPolicy(), Sleeper.REAL);
+    }
+
+    public OpenAiCompatibleLlmClient(LlmConfig config, List<AgentTool> tools,
+                                     RetryPolicy retryPolicy, Sleeper sleeper) {
         this.config = Objects.requireNonNull(config, "config");
         this.tools = List.copyOf(Objects.requireNonNull(tools, "tools"));
+        this.retryPolicy = Objects.requireNonNull(retryPolicy, "retryPolicy");
+        this.sleeper = Objects.requireNonNull(sleeper, "sleeper");
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(config.connectTimeout())
                 .build();
@@ -77,21 +88,32 @@ public final class OpenAiCompatibleLlmClient implements LlmClient {
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
 
-        HttpResponse<String> response;
+        int attempt = 0;
+        while (true) {
+            HttpResponse<String> response = send(request);
+            int status = response.statusCode();
+            if (status >= 200 && status < 300) {
+                return parseResponse(response.body());
+            }
+            // 仅可重试状态重试（指数退避）；否则立即失败
+            if (!retryPolicy.isRetryable(status) || attempt >= retryPolicy.maxRetries()) {
+                throw new LlmException("LLM API error: HTTP " + status + " - " + extractError(response.body()));
+            }
+            attempt++;
+            log.info("LLM API retry {}/{} for HTTP {}", attempt, retryPolicy.maxRetries(), status);
+            sleeper.sleep(retryPolicy.backoffFor(attempt));
+        }
+    }
+
+    private HttpResponse<String> send(HttpRequest request) {
         try {
-            response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         } catch (IOException e) {
             throw new LlmException("LLM request failed (IO): " + e.getMessage(), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new LlmException("LLM request interrupted", e);
         }
-
-        int status = response.statusCode();
-        if (status < 200 || status >= 300) {
-            throw new LlmException("LLM API error: HTTP " + status + " - " + extractError(response.body()));
-        }
-        return parseResponse(response.body());
     }
 
     private String endpoint() {

@@ -30,6 +30,17 @@ class PolicyPermissionManagerTest {
     }
 
     @Test
+    void defaultCommitAsks() {
+        assertEquals(PermissionDecision.ASK, defaults.decide(request(PermissionScope.COMMIT, "git_commit")));
+    }
+
+    @Test
+    void overrideDeniesCommitByToolName() {
+        PolicyPermissionManager policy = defaults.withOverride("git_commit", PermissionDecision.DENY);
+        assertEquals(PermissionDecision.DENY, policy.decide(request(PermissionScope.COMMIT, "git_commit")));
+    }
+
+    @Test
     void overrideDeniesShell() {
         PolicyPermissionManager policy = defaults.withOverride("shell", PermissionDecision.DENY);
         assertEquals(PermissionDecision.DENY, policy.decide(request(PermissionScope.SHELL, "shell")));

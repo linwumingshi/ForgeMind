@@ -2,6 +2,8 @@ package com.forgemind.core.loop;
 
 import com.forgemind.core.config.AgentConfig;
 import com.forgemind.core.context.AgentContext;
+import com.forgemind.core.context.DeterministicContextSummaryExtractor;
+import com.forgemind.core.context.TokenEstimator;
 import com.forgemind.core.exception.AgentException;
 import com.forgemind.core.exception.InvalidToolCallException;
 import com.forgemind.core.exception.MaxIterationsExceededException;
@@ -12,6 +14,7 @@ import com.forgemind.core.tool.ToolResultRenderer;
 import com.forgemind.model.AgentResponse;
 import com.forgemind.model.AgentResult;
 import com.forgemind.model.ChatMessage;
+import com.forgemind.model.ContextSummary;
 import com.forgemind.model.Role;
 import com.forgemind.model.ToolCall;
 import com.forgemind.model.ToolResult;
@@ -46,6 +49,12 @@ public final class AgentLoop {
     /** 连续畸形响应的阈值：超过则终止（架构 §5.3 错误处理矩阵）。 */
     private static final int INVALID_RESPONSE_THRESHOLD = 3;
 
+    /** finish_reason=length 时的续写提示（内部消息，不改动用户原始任务）。 */
+    private static final String CONTINUATION_PROMPT =
+            "Previous response was truncated because the output limit was reached. "
+                    + "Continue from where you stopped. Do not repeat completed content. "
+                    + "Continue the current task.";
+
     private final Path workingDirectory;
     private final LlmClient llm;
     private final ToolRegistry registry;
@@ -75,6 +84,7 @@ public final class AgentLoop {
         int toolCallCount = 0;
         String partialAnswer = null;
         int consecutiveInvalid = 0;
+        int continuationCount = 0;
         try {
             while (true) {
                 if (iterations >= config.maxIterations()) {
@@ -84,8 +94,18 @@ public final class AgentLoop {
                 iterations++;
                 log.info("loop iteration {}/{}", iterations, config.maxIterations());
 
-                // M6：进入 LLM 前按字符预算压缩旧消息（0 = 禁用）
-                context.compactIfNeeded(config.contextMaxChars());
+                // M6/M7：进入 LLM 前压缩旧消息（token 预算优先，回退字符预算）
+                ContextSummary summary = DeterministicContextSummaryExtractor.extract(context.messages());
+                int removed;
+                if (config.contextMaxTokens() > 0) {
+                    removed = context.compactIfNeededTokens(
+                            config.usableContextTokens(), TokenEstimator.DEFAULT);
+                } else {
+                    removed = context.compactIfNeeded(config.contextMaxChars());
+                }
+                if (removed > 0 && !summary.isEmpty()) {
+                    context.appendMessage(ChatMessage.system(summary.render()));
+                }
 
                 AgentResponse response = llm.chat(context.messages());
                 if (response != null && response.finishReason() != null) {
@@ -103,6 +123,16 @@ public final class AgentLoop {
                                 context, consecutiveInvalid, "empty response");
                         continue;
                     }
+                    if ("length".equals(response.finishReason())) {
+                        // M7：截断续写；超过 maxContinuationAttempts 或禁用时结束
+                        partialAnswer = response.content();
+                        if (continuationCount < config.maxContinuationAttempts()) {
+                            continuationCount++;
+                            context.appendMessage(ChatMessage.user(CONTINUATION_PROMPT));
+                            continue;
+                        }
+                        return AgentResult.completed(response.content(), iterations, toolCallCount);
+                    }
                     return AgentResult.completed(response.content(), iterations, toolCallCount);
                 }
                 if (containsInvalidToolCall(response.toolCalls())) {
@@ -113,6 +143,7 @@ public final class AgentLoop {
                 }
 
                 consecutiveInvalid = 0;
+                continuationCount = 0;
                 if (response.content() != null && !response.content().isBlank()) {
                     partialAnswer = response.content();
                 }

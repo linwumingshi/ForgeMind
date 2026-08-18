@@ -47,4 +47,28 @@ final class GitTestSupport {
         git(dir, "add", "-A");
         git(dir, "commit", "-m", message);
     }
+
+    /** 最近一次 commit 的完整 message。 */
+    static String lastCommitMessage(Path dir) throws Exception {
+        Process p = new ProcessBuilder("git", "-C", dir.toString(), "log", "-1", "--pretty=%B").start();
+        String out = new String(p.getInputStream().readAllBytes());
+        p.waitFor();
+        return out.trim();
+    }
+
+    /** 当前 commit 数量。 */
+    static int commitCount(Path dir) throws Exception {
+        Process p = new ProcessBuilder("git", "-C", dir.toString(), "rev-list", "--count", "HEAD").start();
+        String out = new String(p.getInputStream().readAllBytes());
+        p.waitFor();
+        return Integer.parseInt(out.trim());
+    }
+
+    /** 最近一次 commit hash。 */
+    static String lastCommitHash(Path dir) throws Exception {
+        Process p = new ProcessBuilder("git", "-C", dir.toString(), "rev-parse", "--short", "HEAD").start();
+        String out = new String(p.getInputStream().readAllBytes());
+        p.waitFor();
+        return out.trim();
+    }
 }

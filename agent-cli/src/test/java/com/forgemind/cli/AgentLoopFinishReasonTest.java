@@ -9,7 +9,10 @@ import com.forgemind.core.config.AgentConfig;
 import com.forgemind.llm.fake.FakeLlmClient;
 import com.forgemind.model.AgentResponse;
 import com.forgemind.model.AgentResult;
+import com.forgemind.model.ChatMessage;
+import com.forgemind.model.Role;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -27,12 +30,19 @@ class AgentLoopFinishReasonTest {
     }
 
     @Test
-    void lengthWithContentCompletesNormally() {
+    void lengthWithContentTriggersContinuationThenCompletes() {
+        // M7 行为：length+content 不再立即 completed，而是追加 continuation 后继续
         FakeLlmClient fake = new FakeLlmClient()
-                .then(AgentResponse.withFinishReason("partial but acceptable", null, "length"));
+                .then(AgentResponse.withFinishReason("partial but acceptable", null, "length"))
+                .then(AgentResponse.finalAnswer("continued and done"));
         AgentResult result = agent(fake).run("task");
-        assertTrue(result.finished(), "finish_reason=length 不应导致失败");
-        assertEquals("partial but acceptable", result.finalAnswer());
+        assertTrue(result.finished(), "续写后应正常完成");
+        assertEquals("continued and done", result.finalAnswer());
+        // continuation 消息已注入
+        List<ChatMessage> second = fake.calls().get(1);
+        ChatMessage last = second.get(second.size() - 1);
+        assertEquals(Role.USER, last.role());
+        assertTrue(last.content().contains("Continue from where you stopped"));
     }
 
     @Test

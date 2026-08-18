@@ -20,22 +20,52 @@ public final class ContextCompactor {
     private ContextCompactor() {
     }
 
-    /** 原地压缩消息列表。 */
-    public static void compact(List<ChatMessage> messages, long maxChars) {
+    /** 原地压缩消息列表（M6 字符版）。返回删除的消息条数。 */
+    public static int compact(List<ChatMessage> messages, long maxChars) {
         if (maxChars <= 0 || messages == null || messages.size() <= 2) {
-            return;
+            return 0;
         }
+        int removed = 0;
         while (totalChars(messages) > maxChars) {
             int lastGroupStart = findLastGroupStart(messages);
             int removable = findOldestRemovableGroupStart(messages, lastGroupStart);
             if (removable < 0) {
-                return; // 只剩受保护组
+                return removed; // 只剩受保护组
             }
+            int sizeBefore = messages.size();
             removeGroup(messages, removable);
+            removed += sizeBefore - messages.size();
             if (messages.size() <= 2) {
-                return; // system + 最后一组，即使超预算也不再删
+                return removed; // system + 最后一组，即使超预算也不再删
             }
         }
+        return removed;
+    }
+
+    /**
+     * Token Budget 版压缩（M7）。{@code maxTokens <= 0} 不压缩；
+     * 其余语义与字符版一致（SYSTEM/最后组保护、原子组、tool_call_id 不孤裂）。
+     * 返回删除的消息条数。
+     */
+    public static int compact(List<ChatMessage> messages, long maxTokens, TokenEstimator estimator) {
+        if (maxTokens <= 0 || messages == null || messages.size() <= 2) {
+            return 0;
+        }
+        int removed = 0;
+        while (estimator.estimate(messages) > maxTokens) {
+            int lastGroupStart = findLastGroupStart(messages);
+            int removable = findOldestRemovableGroupStart(messages, lastGroupStart);
+            if (removable < 0) {
+                return removed;
+            }
+            int sizeBefore = messages.size();
+            removeGroup(messages, removable);
+            removed += sizeBefore - messages.size();
+            if (messages.size() <= 2) {
+                return removed;
+            }
+        }
+        return removed;
     }
 
     /** 粗略字符预算（content + tool_calls 元数据）。 */

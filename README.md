@@ -2,39 +2,53 @@
 
 一个类似 Claude Code / Codex 的 Coding Agent：理解任务、分析代码库、调用工具（读/写/改文件、搜索、执行命令）、运行测试并迭代直到完成任务。
 
-> 当前进度：**M0–M6（Git 感知 + Context/Tool Output 管理 + Coding Flow）已完成**（304 个测试 + 5 个打包集成测试全绿），下一步为 M7+（git_commit/Token Budget/Streaming 等）。
+> 当前进度：**M0–M7（Token Context + Summary + 自动续写 + HTTP Retry + Git Commit）已完成**（371 个测试 + 5 个打包集成测试全绿），下一步为 M8+（Streaming/MCP/SubAgent 等）。
 
-## Coding Agent 示例
+## Coding Agent 完整工作流（M7 闭环验证）
 
-> "检查当前 Git 修改，分析 XXX 文件，修复问题并展示 diff" 已由
-> `AgentLoopGitFlowTest` 以真实 Git + 8 Tool 闭环验证：`git_status → read_file →
-> edit_file → git_diff → final answer`，真实文件被修改、diff 可见修改。
+> `git_status → read_file → edit_file → git_diff → git_commit → git_status → final`
+> 已由 `AgentLoopGitCommitFlowTest` 以真实 Git + 9 Tool 闭环验证：真实文件修改、
+> commit 创建（git log 可见）、最终 status clean、tool_call_id 完整；COMMIT DENY 时
+> failure 回灌且 Agent 自纠不崩溃。
 
 ```powershell
-.\forgemind.cmd --working-dir D:\workspace --yes "检查当前 Git 修改，分析 src\Bug.java，修复其中的 bug 并展示 diff"
+.\forgemind.cmd --working-dir D:\workspace --yes "检查 Git 修改，修复 src\Bug.java 的 bug，运行测试，查看 diff 并 git commit"
 ```
 
-## 模块结构（M6 更新）
+## 模块结构（M7 更新）
 
 | 模块 | 职责 |
 |---|---|
-| `agent-model` | 纯数据模型：消息、Tool Call/Result、Schema、AgentResponse（含 finishReason）（无业务依赖，仅 Jackson） |
-| `agent-core` | 核心编排：Agent / AgentLoop（畸形阈值/完整回灌/Context 压缩触发）/ Tool SPI / Permission / WorkspaceAccess / 异常 / ToolLimits / LlmConfig / **ToolResultRenderer / ContextCompactor**（仅依赖 model + slf4j，无 Spring） |
-| `agent-llm` | FakeLlmClient + OpenAiCompatibleLlmClient（JDK HttpClient；解析 finish_reason） |
-| `agent-tools` | 8 个 AgentTool：list_files / read_file / write_file / edit_file / search / shell / **git_status / git_diff**（含 cmd/powershell provider、UTF-8/GBK 双解码、GitProvider） |
+| `agent-model` | 纯数据模型：消息、Tool Call/Result、Schema、AgentResponse（含 finishReason）、**ContextSummary**（无业务依赖，仅 Jackson） |
+| `agent-core` | 核心编排：Agent / AgentLoop（畸形阈值/完整回灌/压缩+Summary/续写）/ Tool SPI / Permission（READ/WRITE/SHELL/**COMMIT**）/ WorkspaceAccess / 异常 / ToolLimits / LlmConfig / **ToolResultRenderer / ContextCompactor / TokenEstimator / DeterministicContextSummaryExtractor / RetryPolicy / Sleeper**（仅依赖 model + slf4j，无 Spring） |
+| `agent-llm` | FakeLlmClient + OpenAiCompatibleLlmClient（JDK HttpClient；finish_reason；**指数退避重试**） |
+| `agent-tools` | 9 个 AgentTool：list_files / read_file / write_file / edit_file / search / shell / **git_status / git_diff / git_commit**（GitProvider 复用 ProcessRunner，COMMIT 独立权限） |
 | `agent-cli` | picocli CLI + 日志脱敏 + YAML 配置 + shade fat jar + 闭环/集成测试 |
 
-## Context / Tool Output 管理（M6）
+## Context 管理（M7）
 
-- **ToolResultRenderer**：所有 Tool 结果进入 LLM Context 前受 `toolOutputLimit`（默认 64KB）统一限制；Tool 已自截断（shell 等）不重复截断；**原始 ToolResult 始终完整保留**。
-- **ContextCompactor**：`contextMaxChars`（默认 120k，0=禁用）字符预算；`ASSISTANT(tool_calls)+TOOL` 原子组删除，SYSTEM 与最近消息永保，`tool_call_id` 不孤裂。
+- **Token Budget**：`contextMaxTokens`（默认 100k，0=禁用回退字符预算）+ `contextReserveTokens`（8k）；`ApproximateTokenEstimator`（ASCII≈4c/token、CJK≈1.5c/token，近似非计费）。
+- **Context Summary**：压缩旧消息组时由 `DeterministicContextSummaryExtractor`（不调 LLM）提取 task/modifiedFiles/commands/testResults，以 SYSTEM `[CONTEXT SUMMARY]` 注入；原子组删除，tool_call_id 不孤裂。
+- **length 自动续写**：`finish_reason=length` → 注入 continuation（`maxContinuationAttempts` 默认 2）；length+tool_calls 先执行工具。
+- **HTTP Retry**：429/500/502/503/504 指数退避重试（500ms→5s ×2，jitter 可关）；400/401/403/404/422 立即失败；错误不泄漏 API Key。
 
-## 测试（304 surefire + 5 failsafe，全绿）
+## Git Workflow 与权限模型
 
-- agent-model：30 · agent-core：84（含 ToolResultRenderer 8 / ContextCompactor 14 / AgentConfig 4）
-- agent-llm：29（含 finish_reason 解析 5）
-- agent-tools：88（含 git_status 6 / git_diff 11）
-- agent-cli：73（含 GitFlow 闭环 / Context 压缩集成 / Tool Output 集成 / finish_reason 行为 4）
+| 权限 | 默认 | 工具 |
+|---|---|---|
+| READ | ALLOW | read/list/search/git_status/git_diff |
+| WRITE | ASK | write_file/edit_file |
+| SHELL | ASK | shell |
+| **COMMIT** | **ASK** | **git_commit**（`git add -A` + `git commit -m`，message 为独立进程参数，注入安全） |
+
+`--yes` 仅表示 Answerer 恒允许，**仍必经 ToolExecutor → PermissionManager → WorkspaceAccess → GitProvider → ProcessRunner**。
+
+## 测试（371 surefire + 5 failsafe，全绿）
+
+- agent-model：36 · agent-core：111（含 TokenEstimator 10 / RetryPolicy 6 / Summary 提取 7）
+- agent-llm：36（含 finish_reason 5 + Retry 8）
+- agent-tools：102（含 git_status 6 / git_diff 11 / git_commit 14）
+- agent-cli：86（含 Continuation 8 / Summary 集成 / LongContext / GitCommitFlow 2 / FinishReason 4）
 
 ## Quick Start（可复制执行）
 

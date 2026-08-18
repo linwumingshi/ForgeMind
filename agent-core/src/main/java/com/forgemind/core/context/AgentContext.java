@@ -47,10 +47,17 @@ public final class AgentContext {
 
     /**
      * 若总字符数超过 {@code maxChars}，压缩旧消息（委托 {@link ContextCompactor}；
-     * {@code maxChars <= 0} 表示禁用）。内部列表仍由本类管理，外部不可直接修改。
+     * {@code maxChars <= 0} 表示禁用）。返回删除的消息条数。
      */
-    public void compactIfNeeded(long maxChars) {
-        ContextCompactor.compact(conversation, maxChars);
+    public int compactIfNeeded(long maxChars) {
+        return ContextCompactor.compact(conversation, maxChars);
+    }
+
+    /**
+     * Token Budget 版压缩（{@code maxTokens <= 0} 表示禁用）。返回删除的消息条数。
+     */
+    public int compactIfNeededTokens(long maxTokens, TokenEstimator estimator) {
+        return ContextCompactor.compact(conversation, maxTokens, estimator);
     }
 
     public int messageCount() {

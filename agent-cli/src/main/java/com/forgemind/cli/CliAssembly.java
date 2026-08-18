@@ -17,6 +17,7 @@ import com.forgemind.tools.fs.EditFileTool;
 import com.forgemind.tools.fs.ListFilesTool;
 import com.forgemind.tools.fs.ReadFileTool;
 import com.forgemind.tools.fs.WriteFileTool;
+import com.forgemind.tools.git.GitCommitTool;
 import com.forgemind.tools.git.GitDiffTool;
 import com.forgemind.tools.git.GitStatusTool;
 import com.forgemind.tools.search.SearchTool;
@@ -34,7 +35,7 @@ public final class CliAssembly {
     private CliAssembly() {
     }
 
-    /** 标准工具集（M6 起 8 个：6 文件/搜索/shell + git_status/git_diff）。 */
+    /** 标准工具集（M7 起 9 个：6 文件/搜索/shell + git_status/git_diff/git_commit）。 */
     public static List<AgentTool> standardTools() {
         return List.of(
                 new ListFilesTool(),
@@ -44,7 +45,8 @@ public final class CliAssembly {
                 new SearchTool(),
                 new ShellTool(),
                 new GitStatusTool(),
-                new GitDiffTool());
+                new GitDiffTool(),
+                new GitCommitTool());
     }
 
     /**

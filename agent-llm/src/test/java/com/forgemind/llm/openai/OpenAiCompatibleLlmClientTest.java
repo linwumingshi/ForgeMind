@@ -46,6 +46,8 @@ class OpenAiCompatibleLlmClientTest {
     private volatile String responseBody = "{}";
     private volatile int responseStatus = 200;
     private volatile long delayMillis = 0;
+    private volatile int[] statusSequence;
+    private volatile int statusIndex;
 
     @BeforeEach
     void startServer() throws IOException {
@@ -60,8 +62,10 @@ class OpenAiCompatibleLlmClientTest {
                     Thread.currentThread().interrupt();
                 }
             }
+            int code = statusSequence != null && statusIndex < statusSequence.length
+                    ? statusSequence[statusIndex++] : responseStatus;
             byte[] bytes = responseBody.getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(responseStatus, bytes.length);
+            exchange.sendResponseHeaders(code, bytes.length);
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(bytes);
             }
@@ -341,5 +345,90 @@ class OpenAiCompatibleLlmClientTest {
     @Test
     void providerNameIsOpenAiCompatible() {
         assertEquals("openai-compatible", client(config("k"), readFileTool()).provider());
+    }
+
+    // ---------- Retry / Exponential Backoff ----------
+
+    private OpenAiCompatibleLlmClient clientNoJitter(LlmConfig cfg, com.forgemind.core.retry.Sleeper sleeper,
+                                                     AgentTool... tools) {
+        com.forgemind.core.retry.RetryPolicy policy = new com.forgemind.core.retry.RetryPolicy(
+                2, Duration.ofMillis(10), Duration.ofMillis(50), 2.0, false);
+        return new OpenAiCompatibleLlmClient(cfg, List.of(tools), policy, sleeper);
+    }
+
+    @Test
+    void retry500ThenSuccess() {
+        statusSequence = new int[]{500, 200};
+        responseBody = finalResponse("ok");
+        AgentResponse response = clientNoJitter(config("k"), com.forgemind.core.retry.Sleeper.NOOP, readFileTool())
+                .chat(List.of(ChatMessage.user("q")));
+        assertEquals("ok", response.content());
+        assertEquals(2, requestBodies.size(), "500 后应重试一次");
+    }
+
+    @Test
+    void retry429ThenSuccess() {
+        statusSequence = new int[]{429, 200};
+        responseBody = finalResponse("ok");
+        assertEquals("ok", clientNoJitter(config("k"), com.forgemind.core.retry.Sleeper.NOOP, readFileTool())
+                .chat(List.of(ChatMessage.user("q"))).content());
+        assertEquals(2, requestBodies.size());
+    }
+
+    @Test
+    void retries502503504() {
+        for (int status : new int[]{502, 503, 504}) {
+            statusSequence = new int[]{status, 200};
+            statusIndex = 0;
+            responseBody = finalResponse("ok");
+            assertEquals("ok", clientNoJitter(config("k"), com.forgemind.core.retry.Sleeper.NOOP, readFileTool())
+                    .chat(List.of(ChatMessage.user("q"))).content());
+            assertEquals(2, requestBodies.size(), "HTTP " + status + " 应重试");
+            requestBodies.clear();
+        }
+    }
+
+    @Test
+    void retriesExhaustedThrows() {
+        statusSequence = new int[]{500, 500, 500};
+        LlmException e = assertThrows(LlmException.class,
+                () -> clientNoJitter(config("k"), com.forgemind.core.retry.Sleeper.NOOP, readFileTool())
+                        .chat(List.of(ChatMessage.user("q"))));
+        assertTrue(e.getMessage().contains("500"));
+        assertEquals(3, requestBodies.size(), "maxRetries=2 → 共 3 次请求");
+    }
+
+    @Test
+    void clientErrorsAreNotRetried() {
+        for (int status : new int[]{400, 401, 403, 404, 422}) {
+            statusSequence = new int[]{status};
+            statusIndex = 0;
+            requestBodies.clear();
+            LlmException e = assertThrows(LlmException.class,
+                    () -> clientNoJitter(config("k"), com.forgemind.core.retry.Sleeper.NOOP, readFileTool())
+                            .chat(List.of(ChatMessage.user("q"))));
+            assertTrue(e.getMessage().contains(String.valueOf(status)));
+            assertEquals(1, requestBodies.size(), "HTTP " + status + " 不应重试");
+        }
+    }
+
+    @Test
+    void timeoutIsNotRetried() {
+        delayMillis = 2000;
+        LlmConfig slow = new LlmConfig(baseUrl + "/v1", "k", "m",
+                Duration.ofSeconds(5), Duration.ofMillis(300));
+        assertThrows(LlmException.class,
+                () -> clientNoJitter(slow, com.forgemind.core.retry.Sleeper.NOOP, readFileTool())
+                        .chat(List.of(ChatMessage.user("q"))));
+        assertEquals(1, requestBodies.size(), "IO/超时不应触发 HTTP 重试");
+    }
+
+    @Test
+    void retryFailureDoesNotLeakApiKey() {
+        statusSequence = new int[]{500, 500, 500};
+        LlmException e = assertThrows(LlmException.class,
+                () -> clientNoJitter(config("secret-key-123"), com.forgemind.core.retry.Sleeper.NOOP, readFileTool())
+                        .chat(List.of(ChatMessage.user("q"))));
+        assertFalse(e.getMessage().contains("secret-key-123"));
     }
 }

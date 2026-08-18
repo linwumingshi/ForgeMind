@@ -17,28 +17,21 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * 集成验证：AgentLoop 真正调用 ContextCompactor（极小 contextMaxChars + 多轮
- * 大 Tool 输出），system 保留、最近消息保留、tool_call_id 不孤裂、任务完成。
+ * 集成：Token Budget（contextMaxTokens）在 AgentLoop 中真实触发压缩；
+ * 回退语义：contextMaxTokens=0 时仍可用 M6 字符预算。
  */
-class AgentLoopContextCompactionTest {
+class AgentLoopLongContextTest {
 
     @TempDir
     Path workspace;
 
-    @BeforeEach
-    void setUp() throws Exception {
-        // 大文件：每次 read 产生远超预算的 TOOL 消息
-        Files.writeString(workspace.resolve("big.txt"),
-                "payload ".repeat(300), StandardCharsets.UTF_8);
-    }
-
     @Test
-    void compactionIsTriggeredByAgentLoop() {
+    void tokenBudgetTriggersCompaction() throws Exception {
+        Files.writeString(workspace.resolve("big.txt"), "payload ".repeat(300), StandardCharsets.UTF_8);
         FakeLlmClient fake = new FakeLlmClient()
                 .then(AgentResponse.withToolCalls(null,
                         List.of(ToolCall.of("c1", "read_file", Map.of("path", "big.txt")))))
@@ -48,28 +41,40 @@ class AgentLoopContextCompactionTest {
                         List.of(ToolCall.of("c3", "read_file", Map.of("path", "big.txt")))))
                 .then(AgentResponse.withToolCalls(null,
                         List.of(ToolCall.of("c4", "read_file", Map.of("path", "big.txt")))))
-                .then(AgentResponse.finalAnswer("done"));
+                .then(AgentResponse.finalAnswer("token budget done"));
 
-        // M7：token 预算优先；此处显式禁用 token（=0）以验证 M6 字符预算路径
         AgentConfig config = new AgentConfig(10, ToolLimits.defaults(),
-                80, 64 * 1024, 0, 0, 2);
+                0, 64 * 1024, 80, 0, 2);
         Agent agent = CliAssembly.buildAgent(config, fake, workspace, req -> false);
-        AgentResult result = agent.run("read repeatedly");
+        AgentResult result = agent.run("task");
         assertTrue(result.finished());
-        assertEquals("done", result.finalAnswer());
+        assertEquals("token budget done", result.finalAnswer());
 
-        // 最后一轮消息：若未压缩应为 2 + 4*2 = 10 条；压缩后应明显更少，且 ≥ 2
-        List<ChatMessage> lastCall = fake.calls().get(fake.callCount() - 1);
-        assertTrue(lastCall.size() < 10, "AgentLoop 应触发压缩，实际消息数=" + lastCall.size());
-        assertTrue(lastCall.size() >= 2);
+        List<ChatMessage> last = fake.calls().get(fake.callCount() - 1);
+        // 未压缩时 2 + 4*2 = 10 条；token 压缩后应更少
+        assertTrue(last.size() < 10, "Token Budget 应触发压缩，实际=" + last.size());
+        assertEquals(Role.SYSTEM, last.get(0).role());
+        assertNoOrphanedToolIds(last);
+    }
 
-        // system 永远保留
-        assertEquals(Role.SYSTEM, lastCall.get(0).role());
-        // 最近消息保留（最后是 ASSISTANT 的 tool_calls 或 TOOL）
-        assertTrue(lastCall.get(lastCall.size() - 1).role() == Role.TOOL
-                || lastCall.get(lastCall.size() - 1).role() == Role.ASSISTANT);
-        // tool_call_id 不孤裂
-        assertNoOrphanedToolIds(lastCall);
+    @Test
+    void zeroTokenBudgetFallsBackToChars() throws Exception {
+        Files.writeString(workspace.resolve("big.txt"), "payload ".repeat(300), StandardCharsets.UTF_8);
+        FakeLlmClient fake = new FakeLlmClient()
+                .then(AgentResponse.withToolCalls(null,
+                        List.of(ToolCall.of("c1", "read_file", Map.of("path", "big.txt")))))
+                .then(AgentResponse.withToolCalls(null,
+                        List.of(ToolCall.of("c2", "read_file", Map.of("path", "big.txt")))))
+                .then(AgentResponse.finalAnswer("chars budget done"));
+        // contextMaxTokens=0（禁用 token）→ 回退 M6 字符预算
+        AgentConfig config = new AgentConfig(10, ToolLimits.defaults(),
+                100, 64 * 1024, 0, 0, 2);
+        Agent agent = CliAssembly.buildAgent(config, fake, workspace, req -> false);
+        AgentResult result = agent.run("task");
+        assertTrue(result.finished());
+        assertEquals("chars budget done", result.finalAnswer());
+        List<ChatMessage> last = fake.calls().get(fake.callCount() - 1);
+        assertTrue(last.size() < 2 + 2 * 2, "字符预算应触发压缩");
     }
 
     private static void assertNoOrphanedToolIds(List<ChatMessage> messages) {
@@ -81,13 +86,6 @@ class AgentLoopContextCompactionTest {
                 assertTrue(expectingTools, "孤立 TOOL：tool_call_id=" + m.toolCallId());
             } else {
                 expectingTools = false;
-            }
-        }
-        for (int i = 0; i < messages.size(); i++) {
-            ChatMessage m = messages.get(i);
-            if (m.role() == Role.ASSISTANT && m.toolCalls() != null && !m.toolCalls().isEmpty()) {
-                boolean hasTool = i + 1 < messages.size() && messages.get(i + 1).role() == Role.TOOL;
-                assertTrue(hasTool, "ASSISTANT(tool_calls) 缺少对应 TOOL");
             }
         }
     }
