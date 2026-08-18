@@ -1,0 +1,23 @@
+# Maven
+target/
+*.class
+*.jar
+!mvnw
+!mvnw.cmd
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+.factorypath
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local config / secrets
+*.local.yml
+.env

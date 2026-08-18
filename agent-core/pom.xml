@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.forgemind</groupId>
+        <artifactId>forge-mind</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>agent-core</artifactId>
+    <name>agent-core</name>
+    <description>Core orchestration: Agent, AgentLoop, Tool SPI, Permission, Workspace fence, exceptions</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.forgemind</groupId>
+            <artifactId>agent-model</artifactId>
+        </dependency>
+
+        <!-- 核心不依赖 Spring / Spring Boot / Spring AI / picocli -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- 测试期 SLF4J 绑定，避免 "No SLF4J providers" 警告 -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

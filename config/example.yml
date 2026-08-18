@@ -1,0 +1,27 @@
+# ForgeMind 示例配置（不包含任何真实 API Key）
+#
+# 用法：
+#   forgemind --config config/example.yml
+#
+# API Key 通过环境变量 FORGEMIND_API_KEY 注入；未设置时加载失败并给出明确错误。
+
+agent:
+  maxIterations: 20
+  toolLimits:
+    listFilesMaxEntries: 500
+    listFilesMaxDepth: 3
+    readFileMaxBytes: 1048576
+    editFileOldTextMaxBytes: 65536
+    searchMaxResults: 200
+    searchMaxFileBytes: 1048576
+    searchIgnoreDirs: [".git", "node_modules", "target", "build", ".idea"]
+    outputLimit: 65536
+    shellTimeout: PT60S
+    shellType: cmd
+
+llm:
+  baseUrl: https://api.deepseek.com/v1
+  apiKey: ${FORGEMIND_API_KEY}
+  model: deepseek-chat
+  connectTimeout: PT10S
+  readTimeout: PT60S
