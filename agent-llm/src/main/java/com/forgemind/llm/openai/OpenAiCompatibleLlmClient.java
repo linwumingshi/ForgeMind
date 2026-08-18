@@ -7,6 +7,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.forgemind.core.config.LlmConfig;
 import com.forgemind.core.exception.LlmException;
 import com.forgemind.core.llm.LlmClient;
+import com.forgemind.core.llm.LlmStreamClient;
+import com.forgemind.core.llm.LlmStreamListener;
+import com.forgemind.core.llm.LlmStreamResult;
 import com.forgemind.core.retry.RetryPolicy;
 import com.forgemind.core.retry.Sleeper;
 import com.forgemind.core.tool.AgentTool;
@@ -17,10 +20,12 @@ import com.forgemind.model.ToolCall;
 import com.forgemind.model.ToolParameter;
 import com.forgemind.model.ToolSchema;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -36,7 +41,8 @@ import org.slf4j.LoggerFactory;
  * OpenAI-Compatible Chat Completions 客户端（OpenAI / DeepSeek / 其他兼容服务）。
  *
  * <p>实现层使用 JDK {@link HttpClient}（零第三方 HTTP 依赖），JSON 编解码使用
- * Jackson（经 agent-model 传递引入）。不实现 Streaming。</p>
+ * Jackson（经 agent-model 传递引入）。支持阻塞 {@link #chat} 与 SSE 流式
+ * {@link #stream}（M8）。</p>
  *
  * <p>工具定义经构造参数注入（{@link AgentTool#schema()} → OpenAI function tool），
  * {@link LlmClient#chat} SPI 签名不变，不被具体 Provider 反向污染。</p>
@@ -46,7 +52,7 @@ import org.slf4j.LoggerFactory;
  * {@code tool_calls.arguments} JSON 解析失败 → 回传空参数，交由
  * AgentLoop/ToolExecutor 参数校验回灌自纠。</p>
  */
-public final class OpenAiCompatibleLlmClient implements LlmClient {
+public final class OpenAiCompatibleLlmClient implements LlmClient, LlmStreamClient {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleLlmClient.class);
 
@@ -113,6 +119,140 @@ public final class OpenAiCompatibleLlmClient implements LlmClient {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new LlmException("LLM request interrupted", e);
+        }
+    }
+
+    /**
+     * 流式调用（M8）：SSE 增量经 listener 回调，完成时携带完整 AgentResponse 与 usage。
+     *
+     * <p>Retry 语义：仅"响应 body 开始消费前"可重试（连接建立失败、HTTP
+     * 429/500/502/503/504）；一旦 2xx 且 SSE 已开始读取，绝不重试（避免重复输出）。</p>
+     */
+    @Override
+    public void stream(List<ChatMessage> messages, LlmStreamListener listener) {
+        Objects.requireNonNull(listener, "listener");
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(endpoint()))
+                .timeout(config.readTimeout())
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + config.apiKey())
+                .POST(HttpRequest.BodyPublishers.ofString(buildStreamRequestBody(messages)))
+                .build();
+
+        HttpResponse<InputStream> response;
+        try {
+            response = sendWithStreamRetry(request);
+        } catch (LlmException e) {
+            listener.onError(e);
+            return;
+        }
+
+        OpenAiStreamAccumulator accumulator = new OpenAiStreamAccumulator();
+        OpenAiSseParser.parse(response.body(), new OpenAiSseParser.Listener() {
+            @Override
+            public void onData(String data) {
+                accumulator.accept(data, deltaObserver(listener));
+            }
+
+            @Override
+            public void onComplete() {
+                AgentResponse agentResponse = accumulator.finish();
+                listener.onComplete(accumulator.hasUsage()
+                        ? LlmStreamResult.of(agentResponse,
+                                accumulator.promptTokens(), accumulator.completionTokens(),
+                                accumulator.totalTokens())
+                        : LlmStreamResult.of(agentResponse));
+            }
+
+            @Override
+            public void onError(IOException error) {
+                listener.onError(new LlmException(
+                        "LLM stream interrupted: " + error.getMessage(), error));
+            }
+        });
+    }
+
+    /** 流式增量 → core listener（丢弃 OpenAI 专有 index）。 */
+    private static OpenAiStreamAccumulator.DeltaObserver deltaObserver(LlmStreamListener listener) {
+        return new OpenAiStreamAccumulator.DeltaObserver() {
+            @Override
+            public void onTextDelta(String text) {
+                listener.onTextDelta(text);
+            }
+
+            @Override
+            public void onToolCallDelta(int index, String id, String name, String arguments) {
+                listener.onToolCallDelta(id, name, arguments);
+            }
+        };
+    }
+
+    /**
+     * 发送流式请求并执行"响应头阶段"重试：连接建立失败 / 429 / 500 / 502 / 503 / 504。
+     * 2xx 后不再重试（body 消费阶段由调用方处理）。
+     */
+    private HttpResponse<InputStream> sendWithStreamRetry(HttpRequest request) {
+        int attempt = 0;
+        while (true) {
+            HttpResponse<InputStream> response;
+            try {
+                response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            } catch (IOException e) {
+                if (attempt < retryPolicy.maxRetries()) {
+                    attempt++;
+                    log.info("LLM stream retry {}/{} after IO failure", attempt, retryPolicy.maxRetries());
+                    sleeper.sleep(retryPolicy.backoffFor(attempt));
+                    continue;
+                }
+                throw new LlmException("LLM stream request failed (IO): " + e.getMessage(), e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new LlmException("LLM stream request interrupted", e);
+            }
+            int status = response.statusCode();
+            if (status >= 200 && status < 300) {
+                return response;
+            }
+            String errorBody = readErrorBody(response.body());
+            if (!retryPolicy.isRetryable(status) || attempt >= retryPolicy.maxRetries()) {
+                throw new LlmException("LLM API error: HTTP " + status + " - " + extractError(errorBody));
+            }
+            attempt++;
+            log.info("LLM stream retry {}/{} for HTTP {}", attempt, retryPolicy.maxRetries(), status);
+            sleeper.sleep(retryPolicy.backoffFor(attempt));
+        }
+    }
+
+    /** 非 2xx 错误体（有限读取，避免大 body）。 */
+    private static String readErrorBody(InputStream in) {
+        if (in == null) {
+            return "";
+        }
+        try {
+            return new String(in.readNBytes(1000), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return "";
+        } finally {
+            try {
+                in.close();
+            } catch (IOException ignored) {
+                // 忽略关闭失败
+            }
+        }
+    }
+
+    /** 流式请求体：与 chat 一致 + {@code stream: true}。 */
+    private String buildStreamRequestBody(List<ChatMessage> messages) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", config.model());
+        body.put("messages", messages.stream().map(this::toWireMessage).toList());
+        body.put("tools", tools.stream().map(this::toWireTool).toList());
+        body.put("tool_choice", "auto");
+        body.put("stream", true);
+        try {
+            return mapper.writeValueAsString(body);
+        } catch (JsonProcessingException e) {
+            throw new LlmException("failed to serialize LLM request: " + e.getMessage(), e);
         }
     }
 

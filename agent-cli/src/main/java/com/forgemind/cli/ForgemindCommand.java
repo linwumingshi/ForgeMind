@@ -79,8 +79,10 @@ public final class ForgemindCommand implements Callable<Integer> {
                 ? request -> true
                 : new InteractivePermissionAnswerer(out, scanner);
         LlmClient llm = llmFactory.apply(loaded.llm());
+        // M8.5：CLI 观察层 —— 文本增量实时输出 + Tool 调用/结果展示；
+        // chat()（非流式）同样兼容（无文本增量，Tool 展示与最终答案不变）。
         com.forgemind.core.Agent agent = CliAssembly.buildAgent(
-                loaded.agent(), llm, wd, answerer);
+                loaded.agent(), llm, wd, answerer, new StreamingProgressRenderer(out));
         new ForgemindApp(out, scanner).run(agent, task, wd);
         return 0;
     }

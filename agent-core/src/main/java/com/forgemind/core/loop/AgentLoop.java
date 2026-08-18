@@ -6,8 +6,12 @@ import com.forgemind.core.context.DeterministicContextSummaryExtractor;
 import com.forgemind.core.context.TokenEstimator;
 import com.forgemind.core.exception.AgentException;
 import com.forgemind.core.exception.InvalidToolCallException;
+import com.forgemind.core.exception.LlmException;
 import com.forgemind.core.exception.MaxIterationsExceededException;
 import com.forgemind.core.llm.LlmClient;
+import com.forgemind.core.llm.LlmStreamClient;
+import com.forgemind.core.llm.LlmStreamListener;
+import com.forgemind.core.llm.LlmStreamResult;
 import com.forgemind.core.tool.ToolExecutor;
 import com.forgemind.core.tool.ToolRegistry;
 import com.forgemind.core.tool.ToolResultRenderer;
@@ -60,18 +64,31 @@ public final class AgentLoop {
     private final ToolRegistry registry;
     private final ToolExecutor executor;
     private final AgentConfig config;
+    private final ProgressListener progress;
 
+    /** 兼容构造：使用 no-op ProgressListener。 */
     public AgentLoop(Path workingDirectory,
                      LlmClient llm,
                      ToolRegistry registry,
                      ToolExecutor executor,
                      AgentConfig config) {
+        this(workingDirectory, llm, registry, executor, config, ProgressListener.NOOP);
+    }
+
+    /** M8：可注入观察层 ProgressListener（异常会被忽略，不影响核心任务）。 */
+    public AgentLoop(Path workingDirectory,
+                     LlmClient llm,
+                     ToolRegistry registry,
+                     ToolExecutor executor,
+                     AgentConfig config,
+                     ProgressListener progress) {
         this.workingDirectory = Objects.requireNonNull(workingDirectory, "workingDirectory")
                 .toAbsolutePath().normalize();
         this.llm = Objects.requireNonNull(llm, "llm");
         this.registry = Objects.requireNonNull(registry, "registry");
         this.executor = Objects.requireNonNull(executor, "executor");
         this.config = Objects.requireNonNull(config, "config");
+        this.progress = safe(Objects.requireNonNull(progress, "progress"));
     }
 
     public AgentResult run(String task) {
@@ -87,6 +104,12 @@ public final class AgentLoop {
         int continuationCount = 0;
         try {
             while (true) {
+                // M8.5：取消边界 —— 线程中断即取消（不杀运行中的 Tool，让当前
+                // Tool 自然完成，循环在下一轮边界停止并返回 failed("cancelled")）。
+                if (Thread.currentThread().isInterrupted()) {
+                    log.warn("agent loop cancelled: thread interrupted after {} iterations", iterations);
+                    return AgentResult.failed(partialAnswer, iterations, toolCallCount, "cancelled");
+                }
                 if (iterations >= config.maxIterations()) {
                     throw new MaxIterationsExceededException(
                             "max iterations exceeded: " + config.maxIterations());
@@ -107,7 +130,8 @@ public final class AgentLoop {
                     context.appendMessage(ChatMessage.system(summary.render()));
                 }
 
-                AgentResponse response = llm.chat(context.messages());
+                // M8：LLM 响应获取（streaming 可选通道；领域决策不变）
+                AgentResponse response = obtainResponse(context);
                 if (response != null && response.finishReason() != null) {
                     log.info("finish_reason={}", response.finishReason());
                 }
@@ -150,7 +174,9 @@ public final class AgentLoop {
                 toolCallCount += response.toolCalls().size();
                 appendAssistantToolCallMessage(context, response);
                 for (ToolCall call : response.toolCalls()) {
+                    progress.onToolCallStarted(call.name());
                     ToolResult result = executor.execute(call.name(), call.arguments());
+                    progress.onToolResult(call.name(), result.success());
                     log.info("tool '{}' -> success={} truncated={}",
                             call.name(), result.success(), result.truncated());
                     context.appendMessage(ChatMessage.tool(call.id(),
@@ -193,6 +219,83 @@ public final class AgentLoop {
             }
         }
         return false;
+    }
+
+    /**
+     * 获取一轮 LLM 响应：LlmClient 支持流式（LlmStreamClient）时走 streaming 通道
+     * （阻塞收集完整 AgentResponse，delta 仅经 ProgressListener 展示），否则回退 chat()。
+     */
+    private AgentResponse obtainResponse(AgentContext context) {
+        if (llm instanceof LlmStreamClient streamClient) {
+            CollectingListener listener = new CollectingListener();
+            streamClient.stream(context.messages(), listener);
+            if (listener.error != null) {
+                throw listener.error;
+            }
+            if (listener.result == null) {
+                throw new LlmException("stream ended without a result");
+            }
+            return listener.result.response();
+        }
+        return llm.chat(context.messages());
+    }
+
+    /** 阻塞收集流式结果；delta 转发给 ProgressListener（不写 Context）。 */
+    private final class CollectingListener implements LlmStreamListener {
+        LlmStreamResult result;
+        LlmException error;
+
+        @Override
+        public void onTextDelta(String delta) {
+            progress.onTextDelta(delta);
+        }
+
+        @Override
+        public void onToolCallDelta(String idDelta, String nameDelta, String argumentsDelta) {
+            // 分片不展示、不执行；完整 ToolCall 由 Accumulator 组装进最终响应
+        }
+
+        @Override
+        public void onComplete(LlmStreamResult result) {
+            this.result = result;
+        }
+
+        @Override
+        public void onError(LlmException error) {
+            this.error = error;
+        }
+    }
+
+    /** 观察层异常不得影响核心任务：包装为忽略（仅记录日志）。 */
+    private static ProgressListener safe(ProgressListener delegate) {
+        return new ProgressListener() {
+            @Override
+            public void onTextDelta(String delta) {
+                try {
+                    delegate.onTextDelta(delta);
+                } catch (RuntimeException e) {
+                    log.warn("progress listener onTextDelta ignored: {}", e.getMessage());
+                }
+            }
+
+            @Override
+            public void onToolCallStarted(String toolName) {
+                try {
+                    delegate.onToolCallStarted(toolName);
+                } catch (RuntimeException e) {
+                    log.warn("progress listener onToolCallStarted ignored: {}", e.getMessage());
+                }
+            }
+
+            @Override
+            public void onToolResult(String toolName, boolean success) {
+                try {
+                    delegate.onToolResult(toolName, success);
+                } catch (RuntimeException e) {
+                    log.warn("progress listener onToolResult ignored: {}", e.getMessage());
+                }
+            }
+        };
     }
 
     private static void appendAssistantToolCallMessage(AgentContext context, AgentResponse response) {

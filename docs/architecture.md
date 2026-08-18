@@ -273,15 +273,21 @@ public interface LlmClient {
     /** 发送完整消息历史，返回结构化响应（含 Tool Calls 或最终文本） */
     AgentResponse chat(List<ChatMessage> messages);
 
-    // 未来扩展：streaming 变体、token 统计、模型名查询
+    // M8 扩展（见 §22）：LlmStreamClient 提供流式变体，chat() 本身不变
+}
+
+/** M8：Streaming 扩展 SPI。实现类同时仍是 LlmClient，chat() 语义不退化。 */
+public interface LlmStreamClient extends LlmClient {
+    /** 阻塞式流式调用：SSE 增量经 listener 回调，完成时回调完整结果。 */
+    void stream(List<ChatMessage> messages, LlmStreamListener listener);
 }
 ```
 
 设计说明：
 - **不绑定任何厂商 SDK**。OpenAI / Anthropic / DeepSeek / 任何 OpenAI-Compatible 服务都只是该接口的一个实现；
-- `AgentLoop` 只依赖该接口，模型切换 = 配置切换（§8）；
+- `AgentLoop` 只依赖 `LlmClient`；M8 起若实例同时是 `LlmStreamClient`，则 `AgentLoop` 自动走流式通道（传输层变化，领域决策不变），否则回退 `chat()` —— **两种模式完全兼容**；
 - `messages` 由 Loop 持有（在 `AgentContext` 中），`LlmClient` 保持无状态、可复用；
-- 实现侧在 `agent-llm`：MVP 用 **Spring AI 2.x 的 OpenAI ChatModel 作为 OpenAI-Compatible 传输层**，外面包一层薄适配器；若 Spring AI 的 Tool Calling 消息模型带来摩擦，可随时替换适配器内部为 Spring `RestClient` 直连 `/chat/completions`，**不触碰 core**（见 ADR-03）。
+- 实现侧在 `agent-llm`：`OpenAiCompatibleLlmClient`（JDK `HttpClient` 直连 `/chat/completions`）+ `FakeLlmClient`（测试）。不使用任何第三方 LLM SDK（见 ADR-03）。
 
 ### 4.5 `AgentTool`（Tool SPI）
 
@@ -1028,4 +1034,34 @@ MVP 阶段（本仓库第一阶段）              后续扩展（按价值排�
 
 ---
 
-*本文档为设计基线；进入编码阶段后，实现与设计的偏差需同步更新本文档并标注修订记录（见 §15–§21）。*
+## 22. M8 实现记录（Streaming 传输 + ProgressListener + CLI 渲染 + 取消）
+
+> M8 完成：SSE 流式解析、流式 Tool Call 累积、`LlmStreamClient` SPI、
+> AgentLoop 流式集成（领域逻辑不变）、`ProgressListener` 观察层、
+> CLI `StreamingProgressRenderer` 增量输出、Thread Interrupt 取消边界。
+
+| # | 设计点 | 为什么 / 方案 / 为什么不选其他 / 影响 | 测试 |
+|---|---|---|---|
+| R55 | **SSE Parser（agent-llm）** | 用 JDK `HttpClient` 流式 body + 自研 `OpenAiSseParser` 解析 SSE（`data:` 行拼接、多行 data、`[DONE]` 结束、BOM 剥离、畸形行忽略），**不引入任何 SSE/WebFlux 依赖** | OpenAiSseParserTest 14 |
+| R56 | **流式 Tool Call 累积** | SSE 里 tool_call 的 id/name/arguments 分片到达。`StreamToolCallAccumulator`（TreeMap 按 index）累积分片，arguments 原样拼接后**一次性解析**；解析失败 → 空参数（复用既有"参数校验回灌自纠"路径）；`OpenAiStreamAccumulator.accept(data, DeltaObserver)` 同步产出 text/tool 增量与完整 `AgentResponse` | StreamToolCallAccumulatorTest 9 + OpenAiStreamAccumulatorTest 18 |
+| R57 | **LlmStreamClient SPI（core）** | Streaming 是**传输层变化**：`LlmStreamClient extends LlmClient`，新增 `stream(messages, listener)`（阻塞式，listener 回调在调用线程）；`LlmClient.chat()` 签名与语义**完全不变**。`AgentLoop.obtainResponse()`：`instanceof LlmStreamClient` → 流式收集，否则 `chat()` —— 非流式 LLM 与旧行为逐字节兼容 | AgentLoopStreamingTest 3 + FakeLlmClientStreamTest 5 |
+| R58 | **流式 Retry 边界** | 仅"响应 body 消费前"重试（连接 IO 失败 + 429/500/502/503/504，复用既有 RetryPolicy+Sleeper）；**2xx 且 SSE 已开始 → 绝不重试**（避免重复输出） | OpenAiCompatibleLlmClientStreamTest 15 |
+| R59 | **ProgressListener（core，观察层）** | Streaming 增量需要 UI 展示，但**不进 Context、不执行 Tool、不参与权限**。`ProgressListener.onTextDelta/onToolCallStarted/onToolResult` 全 default no-op + `NOOP`；AgentLoop 以 `safe()` 包装，**监听器抛异常被忽略**（仅日志），绝不影响核心任务；delta 永不写入 AgentContext（Context 只存完整 AssistantMessage + ToolResult，tool_call_id 严格配对） | ProgressListenerTest 3 + AgentLoopStreamContextTest 2 |
+| R60 | **CLI StreamingProgressRenderer** | `StreamingProgressRenderer`（agent-cli）：text delta 实时打印 + flush；`[tool: name] [success]` / `[failed]` 展示 Tool 生命周期。`CliAssembly.buildAgent` 新增 5 参重载注入（4 参委托 NOOP，向后兼容）；`ForgemindCommand` 接线。**非流式 chat() LLM 同样可用**：无文本增量，Tool 展示与最终答案不变 | StreamingProgressRendererTest 4 + ForgemindCommandStreamingTest 2 |
+| R61 | **Thread Interrupt 取消边界** | 取消 = 线程中断（不引入异步线程池/终端框架）。AgentLoop 每轮迭代边界检查 `Thread.currentThread().isInterrupted()` → `failed("cancelled")`；**不杀运行中的 Tool**（当前 Tool 自然完成、副作用落盘，下一轮边界停止），后续不再调用 LLM | AgentLoopCancellationTest 3 |
+| R62 | **流式权限/错误链不变** | Streaming 只是传输：完整 ToolCall 仍走 `AgentLoop → ToolExecutor → PermissionManager → WorkspaceAccess → AgentTool`；COMMIT DENY 经流式通道仍 failure 回灌 → 第二轮 stream 自纠；FakeLlmClient 的 null 响应走 `onComplete(null)`（与 chat() 返回 null 语义一致，可恢复畸形响应计数），LlmException 才走 `onError` | AgentLoopStreamPermissionTest 1 + AgentLoopStreamToolFlowTest 3 |
+
+### M8 实现与计划差异
+
+1. **Spring AI 被放弃**（M8.1 调研结论 B）：离线依赖闭包缺失（Jackson 3.0.3 / classmate 1.7.2 / context-propagation 1.2.1 / micrometer-tracing 1.7.0 / kotlin-stdlib 2.3.21 / azure-identity 1.18.2 等），`spring-ai-model:2.0.0` 同样无法离线解析。按既定原则**不新增第三方依赖**，改用 JDK `HttpClient` + 自研 SSE 解析（R55–R58），架构反而更薄。
+2. **流式为传输层**：AgentLoop 的迭代预算 / invalid 计数 / finish_reason=length 续写 / ContextSummary / 权限链全部复用 M6/M7 逻辑，零领域改动（仅 `obtainResponse` 通道分派 + 观察层回调）。
+3. **取消 = 边界检查**：不做运行中 Tool 的中断注入（避免破坏 ProcessRunner 既有语义），只在循环边界收敛；CLI 层面取消表现为 `[not finished] cancelled`。
+
+### M8 行为记录
+
+- 453 surefire + 5 failsafe = 458 全绿；`mvn -o clean test / verify / package` BUILD SUCCESS；
+- `forgemind.cmd --version / --help` 正常；真实 LLM E2E 未执行（无 API Key），流式/取消/权限/上下文均由 Fake LLM / 本地 HttpServer 验证。
+
+---
+
+*本文档为设计基线；进入编码阶段后，实现与设计的偏差需同步更新本文档并标注修订记录（见 §15–§22）。*

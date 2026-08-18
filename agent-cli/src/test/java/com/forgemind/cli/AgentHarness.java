@@ -3,6 +3,7 @@ package com.forgemind.cli;
 import com.forgemind.core.config.AgentConfig;
 import com.forgemind.core.fs.WorkspaceAccess;
 import com.forgemind.core.loop.AgentLoop;
+import com.forgemind.core.loop.ProgressListener;
 import com.forgemind.core.permission.PermissionAnswerer;
 import com.forgemind.core.permission.PolicyPermissionManager;
 import com.forgemind.core.tool.AgentTool;
@@ -36,11 +37,18 @@ final class AgentHarness {
     }
 
     /**
-     * 构造完整闭环 AgentLoop。{@code extraTools} 用于注入测试专用工具
-     * （如 {@link BrokenTool}）。
+     * 构造完整闭环 AgentLoop（no-op ProgressListener）。{@code extraTools} 用于
+     * 注入测试专用工具（如 {@link BrokenTool}）。
      */
     static AgentLoop newLoop(Path workspace, FakeLlmClient fake, AgentConfig config,
                              PermissionAnswerer answerer, AgentTool... extraTools) {
+        return newLoop(workspace, fake, config, answerer, ProgressListener.NOOP, extraTools);
+    }
+
+    /** M8：可注入观察层 ProgressListener（观察 streaming 增量）。 */
+    static AgentLoop newLoop(Path workspace, FakeLlmClient fake, AgentConfig config,
+                             PermissionAnswerer answerer, ProgressListener progress,
+                             AgentTool... extraTools) {
         InMemoryToolRegistry registry = new InMemoryToolRegistry();
         registerAll(registry);
         for (AgentTool tool : extraTools) {
@@ -48,6 +56,6 @@ final class AgentHarness {
         }
         DefaultToolExecutor executor = new DefaultToolExecutor(registry,
                 PolicyPermissionManager.withDefaults(), answerer, new WorkspaceAccess(workspace));
-        return new AgentLoop(workspace, fake, registry, executor, config);
+        return new AgentLoop(workspace, fake, registry, executor, config, progress);
     }
 }

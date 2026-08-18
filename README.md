@@ -2,7 +2,7 @@
 
 一个类似 Claude Code / Codex 的 Coding Agent：理解任务、分析代码库、调用工具（读/写/改文件、搜索、执行命令）、运行测试并迭代直到完成任务。
 
-> 当前进度：**M0–M7（Token Context + Summary + 自动续写 + HTTP Retry + Git Commit）已完成**（371 个测试 + 5 个打包集成测试全绿），下一步为 M8+（Streaming/MCP/SubAgent 等）。
+> 当前进度：**M0–M8（Streaming 实时输出 + Tool 增量展示 + 取消边界）已完成**（453 个测试 + 5 个打包集成测试全绿），下一步为 M9+（MCP/SubAgent 等）。
 
 ## Coding Agent 完整工作流（M7 闭环验证）
 
@@ -15,15 +15,25 @@
 .\forgemind.cmd --working-dir D:\workspace --yes "检查 Git 修改，修复 src\Bug.java 的 bug，运行测试，查看 diff 并 git commit"
 ```
 
-## 模块结构（M7 更新）
+## 模块结构（M8 更新）
 
 | 模块 | 职责 |
 |---|---|
 | `agent-model` | 纯数据模型：消息、Tool Call/Result、Schema、AgentResponse（含 finishReason）、**ContextSummary**（无业务依赖，仅 Jackson） |
-| `agent-core` | 核心编排：Agent / AgentLoop（畸形阈值/完整回灌/压缩+Summary/续写）/ Tool SPI / Permission（READ/WRITE/SHELL/**COMMIT**）/ WorkspaceAccess / 异常 / ToolLimits / LlmConfig / **ToolResultRenderer / ContextCompactor / TokenEstimator / DeterministicContextSummaryExtractor / RetryPolicy / Sleeper**（仅依赖 model + slf4j，无 Spring） |
-| `agent-llm` | FakeLlmClient + OpenAiCompatibleLlmClient（JDK HttpClient；finish_reason；**指数退避重试**） |
+| `agent-core` | 核心编排：Agent / AgentLoop（畸形阈值/完整回灌/压缩+Summary/续写/**Streaming 通道分派**/**取消边界**）/ Tool SPI / Permission（READ/WRITE/SHELL/**COMMIT**）/ WorkspaceAccess / 异常 / ToolLimits / LlmConfig / **LlmStreamClient SPI / ProgressListener 观察层** / ToolResultRenderer / ContextCompactor / TokenEstimator / DeterministicContextSummaryExtractor / RetryPolicy / Sleeper（仅依赖 model + slf4j，无 Spring） |
+| `agent-llm` | FakeLlmClient + OpenAiCompatibleLlmClient（JDK HttpClient；finish_reason；**SSE 流式解析 + 流式 Tool Call 累积**；指数退避重试） |
 | `agent-tools` | 9 个 AgentTool：list_files / read_file / write_file / edit_file / search / shell / **git_status / git_diff / git_commit**（GitProvider 复用 ProcessRunner，COMMIT 独立权限） |
-| `agent-cli` | picocli CLI + 日志脱敏 + YAML 配置 + shade fat jar + 闭环/集成测试 |
+| `agent-cli` | picocli CLI + **StreamingProgressRenderer 增量输出** + 日志脱敏 + YAML 配置 + shade fat jar + 闭环/集成测试 |
+
+## Streaming（M8）
+
+- **传输层变化，领域逻辑不变**：`LlmStreamClient extends LlmClient`；AgentLoop 检测到流式能力自动走 `stream()`，否则回退 `chat()` —— 两种模式完全兼容，`chat()` 语义不退化。
+- **SSE 管线**：`OpenAiSseParser`（SSE→data）→ `OpenAiStreamAccumulator`（data→增量+完整响应）→ `StreamToolCallAccumulator`（tool_call 分片累积、arguments 一次性解析）。
+- **实时增量输出**：CLI 经 `StreamingProgressRenderer` 逐字符打印文本 delta（每次 flush），Tool 调用/结果显示为 `[tool: name] [success]` / `[failed]`。
+- **delta 不进 Context**：AgentContext 只存完整 AssistantMessage（完整 content + 完整 tool_calls）与 ToolResult，tool_call_id 严格配对；增量仅供展示。
+- **流式 Retry**：仅 body 消费前重试（IO 失败 + 429/500/502/503/504）；2xx 且 SSE 已开始绝不重试。
+- **取消**：线程中断 → AgentLoop 在循环边界返回 `failed("cancelled")`；运行中的 Tool 不被打断（自然完成），后续不再调用 LLM。CLI 表现为 `[not finished] cancelled`。
+- 安全链不变：流式完整 ToolCall 仍走 `AgentLoop → ToolExecutor → PermissionManager → WorkspaceAccess → AgentTool`；DENY 经流式通道 failure 回灌自纠。
 
 ## Context 管理（M7）
 
@@ -43,12 +53,12 @@
 
 `--yes` 仅表示 Answerer 恒允许，**仍必经 ToolExecutor → PermissionManager → WorkspaceAccess → GitProvider → ProcessRunner**。
 
-## 测试（371 surefire + 5 failsafe，全绿）
+## 测试（453 surefire + 5 failsafe，全绿）
 
 - agent-model：36 · agent-core：111（含 TokenEstimator 10 / RetryPolicy 6 / Summary 提取 7）
-- agent-llm：36（含 finish_reason 5 + Retry 8）
+- agent-llm：97（含 SSE 解析 14 / 流式累积 27 / 流式客户端 15 / Fake 流式 5）
 - agent-tools：102（含 git_status 6 / git_diff 11 / git_commit 14）
-- agent-cli：86（含 Continuation 8 / Summary 集成 / LongContext / GitCommitFlow 2 / FinishReason 4）
+- agent-cli：107（含 Streaming 集成 / Cancellation 3 / Renderer 4 / 流式 CLI 2 / Continuation 8 / GitCommitFlow 2 / FinishReason 4）
 
 ## Quick Start（可复制执行）
 

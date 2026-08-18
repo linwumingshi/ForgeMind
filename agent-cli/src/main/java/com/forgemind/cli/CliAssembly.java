@@ -8,6 +8,7 @@ import com.forgemind.core.exception.ConfigException;
 import com.forgemind.core.fs.WorkspaceAccess;
 import com.forgemind.core.llm.LlmClient;
 import com.forgemind.core.loop.AgentLoop;
+import com.forgemind.core.loop.ProgressListener;
 import com.forgemind.core.permission.PermissionAnswerer;
 import com.forgemind.core.permission.PolicyPermissionManager;
 import com.forgemind.core.tool.AgentTool;
@@ -72,12 +73,22 @@ public final class CliAssembly {
      */
     public static Agent buildAgent(AgentConfig config, LlmClient llm,
                                    Path workingDir, PermissionAnswerer answerer) {
+        return buildAgent(config, llm, workingDir, answerer, ProgressListener.NOOP);
+    }
+
+    /**
+     * M8.5：装配完整 Agent，并注入 CLI 观察层 {@code progress}（如
+     * {@link StreamingProgressRenderer}）。装配其余部分与 4 参版本完全一致。
+     */
+    public static Agent buildAgent(AgentConfig config, LlmClient llm,
+                                   Path workingDir, PermissionAnswerer answerer,
+                                   ProgressListener progress) {
         InMemoryToolRegistry registry = new InMemoryToolRegistry();
         standardTools().forEach(registry::register);
         WorkspaceAccess workspace = new WorkspaceAccess(workingDir);
         DefaultToolExecutor executor = new DefaultToolExecutor(registry,
                 PolicyPermissionManager.withDefaults(), answerer, workspace, config.toolLimits());
-        AgentLoop loop = new AgentLoop(workingDir, llm, registry, executor, config);
+        AgentLoop loop = new AgentLoop(workingDir, llm, registry, executor, config, progress);
         return new DefaultAgent(loop);
     }
 }
