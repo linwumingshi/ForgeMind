@@ -2,7 +2,7 @@
 
 一个类似 Claude Code / Codex 的 Coding Agent：理解任务、分析代码库、调用工具（读/写/改文件、搜索、执行命令）、运行测试并迭代直到完成任务。
 
-> 当前进度：**M0–M8（Streaming 实时输出 + Tool 增量展示 + 取消边界）已完成**（453 个测试 + 5 个打包集成测试全绿），下一步为 M9+（MCP/SubAgent 等）。
+> 当前进度：**M0–M9（Streaming 实时输出 + Tool/SubAgent 增量展示 + 取消边界 + SubAgent 编排 + CLI 可观测性）已完成**（516 个测试 + 5 个打包集成测试全绿），下一步为 M10+（MCP/SubAgent 深化等）。
 
 ## Coding Agent 完整工作流（M7 闭环验证）
 
@@ -25,15 +25,23 @@
 | `agent-tools` | 9 个 AgentTool：list_files / read_file / write_file / edit_file / search / shell / **git_status / git_diff / git_commit**（GitProvider 复用 ProcessRunner，COMMIT 独立权限） |
 | `agent-cli` | picocli CLI + **StreamingProgressRenderer 增量输出** + 日志脱敏 + YAML 配置 + shade fat jar + 闭环/集成测试 |
 
-## Streaming（M8）
+## Streaming（M8/M9.4）
 
 - **传输层变化，领域逻辑不变**：`LlmStreamClient extends LlmClient`；AgentLoop 检测到流式能力自动走 `stream()`，否则回退 `chat()` —— 两种模式完全兼容，`chat()` 语义不退化。
 - **SSE 管线**：`OpenAiSseParser`（SSE→data）→ `OpenAiStreamAccumulator`（data→增量+完整响应）→ `StreamToolCallAccumulator`（tool_call 分片累积、arguments 一次性解析）。
-- **实时增量输出**：CLI 经 `StreamingProgressRenderer` 逐字符打印文本 delta（每次 flush），Tool 调用/结果显示为 `[tool: name] [success]` / `[failed]`。
+- **实时增量输出（CLI 可观测性，M9.4）**：`StreamingProgressRenderer` 逐字符打印文本 delta（每次 flush），Tool 调用/结果显示 `[tool: name] [success]` / `[failed]`；SubAgent 生命周期显示 `[subagent:start] task [complete]` / `[failed]`；连续事件不产生空行；超长 SubAgent 任务截断。
+- **最终摘要**：每次任务结束输出 `status: success / failed / cancelled`、`iterations` / `toolCalls` / `subAgents` 统计；streaming 模式 delta 已实时显示完整答案 → Final block 用 `(streamed above)` 占位，**不重复输出 final answer**；非 streaming 模式打印完整答案。
 - **delta 不进 Context**：AgentContext 只存完整 AssistantMessage（完整 content + 完整 tool_calls）与 ToolResult，tool_call_id 严格配对；增量仅供展示。
 - **流式 Retry**：仅 body 消费前重试（IO 失败 + 429/500/502/503/504）；2xx 且 SSE 已开始绝不重试。
-- **取消**：线程中断 → AgentLoop 在循环边界返回 `failed("cancelled")`；运行中的 Tool 不被打断（自然完成），后续不再调用 LLM。CLI 表现为 `[not finished] cancelled`。
+- **取消**：线程中断 → AgentLoop 在循环边界返回 `failed("cancelled")`；运行中的 Tool 不被打断（自然完成），后续不再调用 LLM。CLI 表现为 `status: cancelled`。
 - 安全链不变：流式完整 ToolCall 仍走 `AgentLoop → ToolExecutor → PermissionManager → WorkspaceAccess → AgentTool`；DENY 经流式通道 failure 回灌自纠。
+
+## SubAgent 编排（M9）
+
+- **模型**：`sub_agent` 工具 + `SubAgentFactory`；主 Agent 经 ToolExecutor 调用工具 → 同步嵌套完整子 AgentLoop（同一线程，无并发）。
+- **隔离**：子 Agent 使用独立白名单 registry（⊆ 主工具集、强制排除 `sub_agent`，深度固定 1）；子 Context 与主 Context 完全隔离；每个子工具调用仍完整经过 `ToolExecutor → PermissionManager → WorkspaceAccess → AgentTool`。
+- **限制**：`maxSubAgents`（默认 5，一次主 run 全局共享预算，超限 failure 回灌）；子 `maxIterations` 优先于继承。
+- **语义**：子 Agent 失败/预算耗尽 → `[subagent:failed]` 回灌主 Agent，主 Agent 自纠继续；普通子失败不传播成 cancelled；线程中断 → 主/子均 cancelled。
 
 ## Context 管理（M7）
 
@@ -53,12 +61,12 @@
 
 `--yes` 仅表示 Answerer 恒允许，**仍必经 ToolExecutor → PermissionManager → WorkspaceAccess → GitProvider → ProcessRunner**。
 
-## 测试（453 surefire + 5 failsafe，全绿）
+## 测试（516 surefire + 5 failsafe，全绿）
 
-- agent-model：36 · agent-core：111（含 TokenEstimator 10 / RetryPolicy 6 / Summary 提取 7）
+- agent-model：36 · agent-core：141（含 SubAgent 工厂/规格 24、TokenEstimator 10、RetryPolicy 6、Summary 提取 7）
 - agent-llm：97（含 SSE 解析 14 / 流式累积 27 / 流式客户端 15 / Fake 流式 5）
-- agent-tools：102（含 git_status 6 / git_diff 11 / git_commit 14）
-- agent-cli：107（含 Streaming 集成 / Cancellation 3 / Renderer 4 / 流式 CLI 2 / Continuation 8 / GitCommitFlow 2 / FinishReason 4）
+- agent-tools：111（含 git_status 6 / git_diff 11 / git_commit 14 / SubAgentTool 9）
+- agent-cli：131（含 SubAgent 闭环 12 / SubAgent 隔离 6 / 渲染器 9 / CLI 可观测性 4 / 流式 CLI 5 / Continuation 8 / GitCommitFlow 2 / FinishReason 4）
 
 ## Quick Start（可复制执行）
 

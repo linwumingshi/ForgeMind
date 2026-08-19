@@ -1064,4 +1064,31 @@ MVP 阶段（本仓库第一阶段）              后续扩展（按价值排�
 
 ---
 
-*本文档为设计基线；进入编码阶段后，实现与设计的偏差需同步更新本文档并标注修订记录（见 §15–§22）。*
+## 23. M9 实现记录（SubAgent 编排 + CLI 可观测性）
+
+> M9 完成：`sub_agent` 工具 + `SubAgentFactory`/`DefaultSubAgentFactory` 同步嵌套编排、
+> 独立白名单 registry 隔离、深度/数量/预算限制、取消与失败语义、CLI 可观测性摘要。
+
+| # | 设计点 | 为什么 / 方案 / 为什么不选其他 / 影响 | 测试 |
+|---|---|---|---|
+| R63 | **SubAgentSpec（无 depth）** | 描述子 Agent 请求（task/tools/maxIterations）；**不含 depth** —— M9 深度固定 1；tools=null/空=继承主工具，非空时逐项非空白校验 + 防御性拷贝 | SubAgentSpecTest 10 |
+| R64 | **SubAgentFactory SPI** | `run(spec)→AgentResult`（失败返回 failed 不抛异常）+ `maxSubAgents()`；core 只定义契约，装配层注入实现 | SubAgentFactoryTest 3 |
+| R65 | **DefaultSubAgentFactory 隔离** | 同步嵌套完整 AgentLoop（同一线程，无并发）；子 Agent 用**独立新建白名单 registry**（⊆ 主工具集，两种模式都强制排除 sub_agent → 深度 1 结构性禁止递归）；白名单外/请求 sub_agent → 整体拒绝不静默裁剪；复用同一 LlmClient/PermissionManager/Answerer/WorkspaceAccess，每个子工具调用仍完整走安全链；子 Context 独立；maxIterations spec 优先否则继承 | DefaultSubAgentFactoryTest 10 + SubAgentFlowTest 6 |
+| R66 | **SubAgentTool（READ）** | `sub_agent` 工具：READ 仅表示"编排本身无副作用"，**绝不继承/授予**子 Agent 文件或 Shell 权限；参数 task/tools/maxIterations 统一经 SubAgentSpec 校验；一次主 run 全局 maxSubAgents 预算（超限 failure 不抛异常）；渲染 AgentResult 为 `[subagent:complete]/[subagent:failed]` 文本，截断复用 ToolResultRenderer | SubAgentToolTest 9 |
+| R67 | **失败/取消语义** | 子失败/预算耗尽/非法白名单/超限 → 全部转 ToolResult 回灌主 Agent（主自纠继续，不异常退出、不误判 cancelled）；线程中断是任务级取消信号 → 同步嵌套下主/子均 cancelled，不杀运行中 Tool | SubAgentIsolationTest 6 |
+| R68 | **CLI 可观测性（M9.4）** | `StreamingProgressRenderer`：text delta 实时输出 + Tool/SubAgent 生命周期 + success/failed 区分 + 连续事件不空行 + 中文 UTF-8 + 超长任务截断；`ForgemindApp` 终态摘要 `status: success/failed/cancelled` + iterations/toolCalls/subAgents 统计；**streaming 模式 delta 已显示 → Final block 用 `(streamed above)` 占位不重复**；非 streaming chat() 打印完整答案（双路径兼容）。渲染器纯观察层，异常不影响任务（AgentLoop safe() 包装） | StreamingProgressRendererTest 9 + ForgemindAppObservabilityTest 4 + ForgemindCommandStreamingTest 5 |
+
+### M9 实现与计划差异
+
+1. **AgentConfig 新增 `maxSubAgents`（默认 5）但不新增 maxDepth**：深度固定 1 由白名单 registry 结构性保证（sub_agent 永不进入子 registry），无需配置字段。
+2. **子 Agent 观察层 = NOOP**：子 loop 内部 delta 不在 M9 展示（避免与主渲染混淆）；SubAgent 开始/结束由 SubAgentTool 经主 ProgressListener 回调。
+3. **maxSubAgents 计数在 Agent 实例生命周期累计**（CLI 单次任务=一次 run；REPL 多任务共享计数，属保守方向），已在 SubAgentTool 注释说明。
+
+### M9 行为记录
+
+- 516 surefire + 5 failsafe = 521 全绿；`mvn -o clean test / verify / package` BUILD SUCCESS；
+- `forgemind.cmd --version / --help` 正常；CLI 可观测性（tool/subagent/status/统计/不重复 final）由 Fake LLM 全自动验证。
+
+---
+
+*本文档为设计基线；进入编码阶段后，实现与设计的偏差需同步更新本文档并标注修订记录（见 §15–§23）。*
