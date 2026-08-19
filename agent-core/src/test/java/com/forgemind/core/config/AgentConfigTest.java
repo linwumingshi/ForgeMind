@@ -22,6 +22,33 @@ class AgentConfigTest {
     }
 
     @Test
+    void m9DefaultsAreSane() {
+        assertEquals(5, AgentConfig.defaults().maxSubAgents());
+        // 全部兼容构造 maxSubAgents 默认 5
+        assertEquals(5, new AgentConfig(20).maxSubAgents());
+        assertEquals(5, new AgentConfig(20, ToolLimits.defaults()).maxSubAgents());
+        assertEquals(5, new AgentConfig(20, ToolLimits.defaults(), 50_000, 4096).maxSubAgents());
+        assertEquals(5, new AgentConfig(10, ToolLimits.defaults(), 1000, 1024, 100, 50, 1)
+                .maxSubAgents());
+    }
+
+    @Test
+    void maxSubAgentsCanBeCustomized() {
+        AgentConfig config = new AgentConfig(10, ToolLimits.defaults(), 1000, 1024,
+                100, 50, 1, 3);
+        assertEquals(3, config.maxSubAgents());
+        // 0 = 禁用 SubAgent
+        assertEquals(0, new AgentConfig(10, ToolLimits.defaults(), 1000, 1024,
+                100, 50, 1, 0).maxSubAgents());
+    }
+
+    @Test
+    void maxSubAgentsRejectsNegative() {
+        assertThrows(ConfigException.class,
+                () -> new AgentConfig(10, ToolLimits.defaults(), 1000, 1024, 100, 50, 1, -1));
+    }
+
+    @Test
     void tokenBudgetValidation() {
         // reserve > max 且 max > 0 → 明确报错
         assertThrows(ConfigException.class,

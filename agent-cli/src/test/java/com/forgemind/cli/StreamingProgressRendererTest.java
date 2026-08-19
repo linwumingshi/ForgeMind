@@ -68,4 +68,67 @@ class StreamingProgressRendererTest {
         c.renderer.onTextDelta("a");
         assertFalse(c.text().isEmpty());
     }
+
+    // ---------- M9.4 ----------
+
+    @Test
+    void printsSubAgentLifecycle() {
+        Captured c = new Captured();
+        c.renderer.onSubAgentStarted("analyze module A");
+        c.renderer.onSubAgentResult("analyze module A", true);
+        c.renderer.onSubAgentStarted("implement fix");
+        c.renderer.onSubAgentResult("implement fix", false);
+        String text = c.text();
+        assertTrue(text.contains("[subagent:start] analyze module A [complete]"));
+        assertTrue(text.contains("[subagent:start] implement fix [failed]"));
+    }
+
+    @Test
+    void subAgentLifecycleWithChineseTask() {
+        Captured c = new Captured();
+        c.renderer.onSubAgentStarted("分析模块");
+        c.renderer.onSubAgentResult("分析模块", true);
+        String text = c.text();
+        assertTrue(text.contains("[subagent:start] 分析模块 [complete]"),
+                "中文任务应原样输出，无乱码: " + text);
+    }
+
+    @Test
+    void longSubAgentTaskIsTruncated() {
+        Captured c = new Captured();
+        String longTask = "t".repeat(200);
+        c.renderer.onSubAgentStarted(longTask);
+        c.renderer.onSubAgentResult(longTask, true);
+        String text = c.text();
+        assertTrue(text.contains("..."), "超长任务应截断");
+        assertFalse(text.contains("t".repeat(200)), "不应输出完整超长任务");
+    }
+
+    @Test
+    void tracksSubAgentCountAndStreamedFlag() {
+        Captured c = new Captured();
+        assertEquals(0, c.renderer.subAgentCount());
+        assertFalse(c.renderer.hasStreamedText());
+        c.renderer.onSubAgentStarted("a");
+        c.renderer.onSubAgentStarted("b");
+        assertEquals(2, c.renderer.subAgentCount());
+        // SubAgent 事件本身不是 text delta
+        assertFalse(c.renderer.hasStreamedText());
+        c.renderer.onTextDelta("x");
+        assertTrue(c.renderer.hasStreamedText());
+    }
+
+    @Test
+    void interleavesToolAndSubAgentLifecycle() {
+        Captured c = new Captured();
+        c.renderer.onTextDelta("planning");
+        c.renderer.onSubAgentStarted("sub");
+        c.renderer.onSubAgentResult("sub", true);
+        c.renderer.onToolCallStarted("read_file");
+        c.renderer.onToolResult("read_file", true);
+        String text = c.text().replace("\r\n", "\n");
+        // 连续事件间不得产生空行；结果以换行结束
+        assertEquals("planning\n[subagent:start] sub [complete]\n[tool: read_file] [success]\n",
+                text);
+    }
 }

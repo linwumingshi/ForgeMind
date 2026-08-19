@@ -21,6 +21,14 @@ public interface ProgressListener {
     default void onToolResult(String toolName, boolean success) {
     }
 
+    /** M9：SubAgent 编排开始（子 Agent 创建并运行前回调；仅观察）。 */
+    default void onSubAgentStarted(String task) {
+    }
+
+    /** M9：SubAgent 编排结束（success 为子 Agent 结果标记；仅观察）。 */
+    default void onSubAgentResult(String task, boolean success) {
+    }
+
     /** 无操作实例。 */
     ProgressListener NOOP = new ProgressListener() {
     };

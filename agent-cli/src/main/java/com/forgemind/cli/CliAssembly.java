@@ -11,6 +11,7 @@ import com.forgemind.core.loop.AgentLoop;
 import com.forgemind.core.loop.ProgressListener;
 import com.forgemind.core.permission.PermissionAnswerer;
 import com.forgemind.core.permission.PolicyPermissionManager;
+import com.forgemind.core.subagent.DefaultSubAgentFactory;
 import com.forgemind.core.tool.AgentTool;
 import com.forgemind.core.tool.DefaultToolExecutor;
 import com.forgemind.core.tool.InMemoryToolRegistry;
@@ -23,6 +24,7 @@ import com.forgemind.tools.git.GitDiffTool;
 import com.forgemind.tools.git.GitStatusTool;
 import com.forgemind.tools.search.SearchTool;
 import com.forgemind.tools.shell.ShellTool;
+import com.forgemind.tools.subagent.SubAgentTool;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -79,6 +81,11 @@ public final class CliAssembly {
     /**
      * M8.5：装配完整 Agent，并注入 CLI 观察层 {@code progress}（如
      * {@link StreamingProgressRenderer}）。装配其余部分与 4 参版本完全一致。
+     *
+     * <p>M9.2：额外注册 {@code sub_agent} 工具与 {@link DefaultSubAgentFactory}。
+     * 工厂与主 Agent 共享同一个 {@link PolicyPermissionManager} /
+     * {@link PermissionAnswerer} / {@link WorkspaceAccess} / {@code LlmClient}，
+     * 子 Agent 的每个工具调用仍完整经过既有安全链。</p>
      */
     public static Agent buildAgent(AgentConfig config, LlmClient llm,
                                    Path workingDir, PermissionAnswerer answerer,
@@ -86,8 +93,13 @@ public final class CliAssembly {
         InMemoryToolRegistry registry = new InMemoryToolRegistry();
         standardTools().forEach(registry::register);
         WorkspaceAccess workspace = new WorkspaceAccess(workingDir);
+        PolicyPermissionManager permissionManager = PolicyPermissionManager.withDefaults();
         DefaultToolExecutor executor = new DefaultToolExecutor(registry,
-                PolicyPermissionManager.withDefaults(), answerer, workspace, config.toolLimits());
+                permissionManager, answerer, workspace, config.toolLimits());
+        // M9：SubAgent 工厂（同步嵌套；与主 Agent 共享安全依赖）
+        DefaultSubAgentFactory subAgentFactory = new DefaultSubAgentFactory(
+                workingDir, llm, registry, permissionManager, answerer, workspace, config);
+        registry.register(new SubAgentTool(subAgentFactory, progress));
         AgentLoop loop = new AgentLoop(workingDir, llm, registry, executor, config, progress);
         return new DefaultAgent(loop);
     }

@@ -59,6 +59,17 @@ public final class AgentLoop {
                     + "Continue from where you stopped. Do not repeat completed content. "
                     + "Continue the current task.";
 
+    /**
+     * 预算耗尽前的收尾提示（内部消息）：任务核心工作通常已完成，仅剩收尾。
+     * 让 LLM 在最后 1-2 轮预算内收敛到最终答案，避免"清理类工具调用消耗预算
+     * 导致来不及输出 final answer"而误报 failed。
+     */
+    private static final String BUDGET_HINT_PROMPT =
+            "You are about to run out of iteration budget. "
+                    + "If the task is complete, reply with your final answer now "
+                    + "and do not call any more tools. If it is not complete, "
+                    + "call only the minimal tool that finishes it.";
+
     private final Path workingDirectory;
     private final LlmClient llm;
     private final ToolRegistry registry;
@@ -102,6 +113,7 @@ public final class AgentLoop {
         String partialAnswer = null;
         int consecutiveInvalid = 0;
         int continuationCount = 0;
+        boolean budgetHintInjected = false;
         try {
             while (true) {
                 // M8.5：取消边界 —— 线程中断即取消（不杀运行中的 Tool，让当前
@@ -115,6 +127,15 @@ public final class AgentLoop {
                             "max iterations exceeded: " + config.maxIterations());
                 }
                 iterations++;
+
+                // 预算将尽：提示 LLM 优先收尾（最后 1-2 轮），避免"任务已完成但
+                // 仍继续工具调用（如清理）→ 预算耗尽来不及输出 final answer → failed"。
+                if (!budgetHintInjected && iterations >= config.maxIterations() - 1) {
+                    log.info("iteration budget nearly exhausted ({}), injecting final-answer hint",
+                            config.maxIterations());
+                    context.appendMessage(ChatMessage.user(BUDGET_HINT_PROMPT));
+                    budgetHintInjected = true;
+                }
                 log.info("loop iteration {}/{}", iterations, config.maxIterations());
 
                 // M6/M7：进入 LLM 前压缩旧消息（token 预算优先，回退字符预算）
