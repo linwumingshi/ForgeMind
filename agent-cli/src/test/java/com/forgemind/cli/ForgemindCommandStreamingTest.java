@@ -85,4 +85,70 @@ class ForgemindCommandStreamingTest {
         assertTrue(text.contains("[tool: read_file] [failed]"), "失败 Tool 应显示 [failed]");
         assertTrue(text.contains("self corrected"));
     }
+
+    // ---------- M9.4 ----------
+
+    @Test
+    void subAgentLifecycleShownWithStatusSummary() throws Exception {
+        Files.writeString(tempDir.resolve("a.txt"), "hello", StandardCharsets.UTF_8);
+        FakeLlmClient fake = new FakeLlmClient()
+                .then(AgentResponse.withToolCalls("delegating",
+                        List.of(ToolCall.of("s1", "sub_agent", Map.of(
+                                "task", "count files",
+                                "tools", List.of("list_files"))))))
+                .then(AgentResponse.withToolCalls(null,
+                        List.of(ToolCall.of("l1", "list_files", Map.of()))))
+                .then(AgentResponse.finalAnswer("sub done"))
+                .then(AgentResponse.finalAnswer("main done"));
+        Captured captured = new Captured();
+        int exit = new CommandLine(commandWith(fake, captured))
+                .execute("--working-dir", tempDir.toString(), "--yes", "delegate");
+        assertEquals(0, exit);
+        String text = captured.text();
+        // 实时展示 SubAgent 生命周期
+        assertTrue(text.contains("[subagent:start] count files [complete]"),
+                "SubAgent 生命周期应实时展示: " + text);
+        // 状态摘要：success + subAgents 计数
+        assertTrue(text.contains("status: success"));
+        assertTrue(text.contains("subAgents: 1"));
+        assertTrue(text.contains("iterations: 2  toolCalls: 1"));
+    }
+
+    @Test
+    void subAgentFailureShownInLifecycleAndSummary() throws Exception {
+        Files.writeString(tempDir.resolve("a.txt"), "hello", StandardCharsets.UTF_8);
+        FakeLlmClient fake = new FakeLlmClient()
+                .then(AgentResponse.withToolCalls("delegating",
+                        List.of(ToolCall.of("s1", "sub_agent", Map.of(
+                                "task", "limited",
+                                "tools", List.of("list_files"),
+                                "maxIterations", 1)))))
+                .then(AgentResponse.withToolCalls(null,
+                        List.of(ToolCall.of("l1", "list_files", Map.of()))))
+                .then(AgentResponse.finalAnswer("main recovered"));
+        Captured captured = new Captured();
+        int exit = new CommandLine(commandWith(fake, captured))
+                .execute("--working-dir", tempDir.toString(), "--yes", "delegate");
+        assertEquals(0, exit);
+        String text = captured.text();
+        assertTrue(text.contains("[subagent:start] limited [failed]"),
+                "失败的 SubAgent 应显示 [failed]: " + text);
+        assertTrue(text.contains("status: success"), "主任务自纠后应 success");
+        assertTrue(text.contains("subAgents: 1"));
+    }
+
+    @Test
+    void streamedFinalAnswerNotDuplicated() throws Exception {
+        FakeLlmClient fake = new FakeLlmClient()
+                .then(AgentResponse.finalAnswer("unique-final-42"));
+        Captured captured = new Captured();
+        int exit = new CommandLine(commandWith(fake, captured))
+                .execute("--working-dir", tempDir.toString(), "--yes", "task");
+        assertEquals(0, exit);
+        String text = captured.text();
+        // streaming 已输出 delta：Final block 用占位，不重复文本
+        assertTrue(text.contains("(streamed above)"));
+        assertTrue(text.indexOf("unique-final-42") == text.lastIndexOf("unique-final-42"),
+                "final answer 只应出现一次（delta），不得重复: " + text);
+    }
 }
