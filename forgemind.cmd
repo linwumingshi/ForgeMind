@@ -22,5 +22,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-java -jar "%JAR%" %*
+rem Encoding alignment: switch console to UTF-8 codepage and force JVM output to UTF-8.
+rem (JDK 22 defaults stdout.encoding=GBK on this machine, mismatching UTF-8 terminals.
+rem  On JDK 17 stdout/stderr.encoding are ignored but harmless; file.encoding covers it.)
+chcp 65001 >nul
+java -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -jar "%JAR%" %*
 exit /b %errorlevel%

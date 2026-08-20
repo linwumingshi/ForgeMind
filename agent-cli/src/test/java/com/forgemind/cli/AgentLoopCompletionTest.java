@@ -78,7 +78,7 @@ class AgentLoopCompletionTest {
         assertEquals(4, result.iterations());
     }
 
-    /** 收尾提示确实被注入：最后 1-2 轮的 LLM 上下文含预算提示，促使 LLM 收尾。 */
+    /** 收尾提示确实被注入：剩余迭代 ≤5 轮（P0-4）时注入一次，促使 LLM 收敛收尾。 */
     @Test
     void budgetHintIsInjectedBeforeLastIterations() {
         FakeLlmClient fake = new FakeLlmClient()
@@ -86,19 +86,24 @@ class AgentLoopCompletionTest {
                 .then(AgentResponse.withToolCalls(null, List.of(call("c2", "shell", Map.of("command", "echo b")))))
                 .then(AgentResponse.withToolCalls(null, List.of(call("c3", "shell", Map.of("command", "echo c")))))
                 .then(AgentResponse.finalAnswer("wrapped up"));
-        // maxIterations=5：iterations>=4 时注入 → 第 4 轮（倒数第 2 次调用）上下文含提示
+        // P0-4：remaining <= 5 即注入。maxIterations=5 → 第 1 轮 remaining=4 ≤5 → 立即注入，
+        // 且只注入一次（后续轮不重复）。
         AgentLoop loop = AgentHarness.newLoop(workspace, fake, new AgentConfig(5), req -> true);
         AgentResult result = loop.run("task");
         assertTrue(result.finished());
-        // 第 4 轮调用（索引 3）上下文应包含收尾提示
-        List<ChatMessage> round4 = fake.calls().get(3);
-        assertTrue(round4.stream().anyMatch(m -> m.role() == Role.USER
-                        && m.content() != null && m.content().contains("iteration budget")),
-                "预算将尽时应注入收尾提示，促 LLM 输出 final answer");
-        // 第 1 轮（索引 0）不应含提示
-        assertFalse(fake.calls().get(0).stream().anyMatch(m -> m.role() == Role.USER
-                        && m.content() != null && m.content().contains("iteration budget")),
-                "预算充足时不应提前注入提示");
+        // 第 1 轮（索引 0）起上下文即包含收尾提示（remaining=4 ≤ 5）
+        List<ChatMessage> round1 = fake.calls().get(0);
+        assertTrue(round1.stream().anyMatch(m -> m.role() == Role.USER
+                        && m.content() != null && m.content().contains("Iteration budget is nearly exhausted")),
+                "remaining ≤5 时应注入收尾提示; calls.size=" + fake.calls().size()
+                        + " round1 roles=" + round1.stream().map(m -> m.role() + ":" + (m.content() == null ? "null" : m.content().length())).toList());
+        // 只注入一次：第 2 轮（索引 1）hint 数量仍为 1（不重复）
+        List<ChatMessage> round2 = fake.calls().get(1);
+        long hints = round2.stream()
+                .filter(m -> m.role() == Role.USER && m.content() != null
+                        && m.content().contains("Iteration budget is nearly exhausted"))
+                .count();
+        assertEquals(1, hints, "收尾提示只应注入一次");
     }
 
     /** 若 LLM 无视提示持续调用工具直至耗尽 → 仍正确 failed（预算硬边界不变）。 */

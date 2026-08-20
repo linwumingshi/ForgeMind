@@ -76,11 +76,11 @@ public final class DefaultToolExecutor implements ToolExecutor {
             decision = allowed ? PermissionDecision.ALLOW : PermissionDecision.DENY;
         }
         if (decision != PermissionDecision.ALLOW) {
-            log.info("permission denied: {}", request);
+            log.warn("permission denied: {}", request);
             return ToolResult.failure("permission denied for tool '" + toolName
                     + "': " + request.description());
         }
-        log.info("executing tool '{}' args={}", toolName, args);
+        log.debug("executing tool '{}' args={}", toolName, args);
 
         try {
             return tool.execute(new ToolContext(workspace, limits), args);

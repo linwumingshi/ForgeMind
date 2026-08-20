@@ -1,17 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
 
-    <!-- 日志脱敏：%sanitize 替换 %msg -->
+    <!-- 日志脱敏：%sanitize 替换 %msg
+         注意：使用 class 属性而非已弃用的 converterClass（logback 1.5.x 会打印
+         deprecated WARN 并触发 status 刷屏）。 -->
     <conversionRule conversionWord="sanitize"
-                    converterClass="com.forgemind.cli.logging.SanitizingConverter"/>
+                    class="com.forgemind.cli.logging.SanitizingConverter"/>
 
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
+            <!-- 显式 UTF-8：避免跟随 System.out（Windows 上为 GBK）导致中文乱码 -->
+            <charset>UTF-8</charset>
             <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} - %sanitize%n</pattern>
         </encoder>
     </appender>
 
-    <root level="INFO">
+    <!-- 默认仅输出 WARN/ERROR：AgentLoop/Executor/LLM client 的开发性 INFO 已降为
+         DEBUG，不污染用户控制台；真实异常（timeout/permission denied 等）保留。 -->
+    <root level="WARN">
         <appender-ref ref="CONSOLE"/>
     </root>
 

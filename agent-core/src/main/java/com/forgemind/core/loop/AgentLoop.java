@@ -4,6 +4,7 @@ import com.forgemind.core.config.AgentConfig;
 import com.forgemind.core.context.AgentContext;
 import com.forgemind.core.context.DeterministicContextSummaryExtractor;
 import com.forgemind.core.context.TokenEstimator;
+import com.forgemind.core.env.EnvironmentInfo;
 import com.forgemind.core.exception.AgentException;
 import com.forgemind.core.exception.InvalidToolCallException;
 import com.forgemind.core.exception.LlmException;
@@ -60,15 +61,17 @@ public final class AgentLoop {
                     + "Continue the current task.";
 
     /**
-     * 预算耗尽前的收尾提示（内部消息）：任务核心工作通常已完成，仅剩收尾。
-     * 让 LLM 在最后 1-2 轮预算内收敛到最终答案，避免"清理类工具调用消耗预算
+     * 预算耗尽前的收尾提示（内部消息）：剩余迭代 ≤5 轮时注入一次，
+     * 让 LLM 停止探索性重试、收敛到最终答案，避免"清理类工具调用消耗预算
      * 导致来不及输出 final answer"而误报 failed。
      */
     private static final String BUDGET_HINT_PROMPT =
-            "You are about to run out of iteration budget. "
-                    + "If the task is complete, reply with your final answer now "
-                    + "and do not call any more tools. If it is not complete, "
-                    + "call only the minimal tool that finishes it.";
+            "Iteration budget is nearly exhausted. Stop exploratory retries. "
+                    + "Complete the task using the minimum necessary actions "
+                    + "and provide the final answer.";
+
+    /** 触发收尾提示的剩余迭代阈值（剩余 ≤5 轮进入收尾模式）。 */
+    private static final int BUDGET_HINT_REMAINING_THRESHOLD = 5;
 
     private final Path workingDirectory;
     private final LlmClient llm;
@@ -76,6 +79,9 @@ public final class AgentLoop {
     private final ToolExecutor executor;
     private final AgentConfig config;
     private final ProgressListener progress;
+
+    /** 相同 shell 命令连续失败护栏（跨轮计数，命令成功即清零）。 */
+    private final CommandFailureTracker failureTracker = new CommandFailureTracker();
 
     /** 兼容构造：使用 no-op ProgressListener。 */
     public AgentLoop(Path workingDirectory,
@@ -128,15 +134,16 @@ public final class AgentLoop {
                 }
                 iterations++;
 
-                // 预算将尽：提示 LLM 优先收尾（最后 1-2 轮），避免"任务已完成但
-                // 仍继续工具调用（如清理）→ 预算耗尽来不及输出 final answer → failed"。
-                if (!budgetHintInjected && iterations >= config.maxIterations() - 1) {
-                    log.info("iteration budget nearly exhausted ({}), injecting final-answer hint",
-                            config.maxIterations());
+                // 预算将尽：剩余 ≤5 轮时提示 LLM 停止探索性重试、收敛收尾，
+                // 避免"任务已完成但仍继续工具调用 → 预算耗尽来不及输出 final answer → failed"。
+                int remaining = config.maxIterations() - iterations;
+                if (!budgetHintInjected && remaining <= BUDGET_HINT_REMAINING_THRESHOLD) {
+                    log.debug("iteration budget nearly exhausted (remaining={}), injecting final-answer hint",
+                            remaining);
                     context.appendMessage(ChatMessage.user(BUDGET_HINT_PROMPT));
                     budgetHintInjected = true;
                 }
-                log.info("loop iteration {}/{}", iterations, config.maxIterations());
+                log.debug("loop iteration {}/{}", iterations, config.maxIterations());
 
                 // M6/M7：进入 LLM 前压缩旧消息（token 预算优先，回退字符预算）
                 ContextSummary summary = DeterministicContextSummaryExtractor.extract(context.messages());
@@ -154,7 +161,7 @@ public final class AgentLoop {
                 // M8：LLM 响应获取（streaming 可选通道；领域决策不变）
                 AgentResponse response = obtainResponse(context);
                 if (response != null && response.finishReason() != null) {
-                    log.info("finish_reason={}", response.finishReason());
+                    log.debug("finish_reason={}", response.finishReason());
                 }
 
                 if (response == null) {
@@ -198,10 +205,25 @@ public final class AgentLoop {
                     progress.onToolCallStarted(call.name());
                     ToolResult result = executor.execute(call.name(), call.arguments());
                     progress.onToolResult(call.name(), result.success());
-                    log.info("tool '{}' -> success={} truncated={}",
+                    log.debug("tool '{}' -> success={} truncated={}",
                             call.name(), result.success(), result.truncated());
                     context.appendMessage(ChatMessage.tool(call.id(),
                             ToolResultRenderer.render(result, call.name(), config.toolOutputLimit())));
+                    // 重复失败护栏：仅 shell tool 计数；成功清零，失败按连续次数注入提示（只提示不阻断）
+                    if ("shell".equals(call.name())) {
+                        String command = commandOf(call);
+                        if (command != null) {
+                            if (result.success()) {
+                                failureTracker.recordSuccess(command);
+                            } else {
+                                int consecutive = failureTracker.recordFailure(command);
+                                String hint = CommandFailureTracker.hintFor(consecutive);
+                                if (hint != null) {
+                                    context.appendMessage(ChatMessage.user(hint));
+                                }
+                            }
+                        }
+                    }
                 }
             }
         } catch (AgentException e) {
@@ -328,8 +350,21 @@ public final class AgentLoop {
         }
     }
 
+    /** 从 Tool Call 参数中提取 shell 命令；缺失或非 String 返回 null（护栏跳过）。 */
+    private static String commandOf(ToolCall call) {
+        if (call.arguments() == null) {
+            return null;
+        }
+        Object raw = call.arguments().get("command");
+        return raw instanceof String s ? s : null;
+    }
+
     private String systemPrompt() {
         StringBuilder sb = new StringBuilder();
+        // 环境感知：OS / Shell / 工作目录 / 命令执行规则（避免模型按错误平台的命令习惯盲试）
+        sb.append(EnvironmentInfo.describe(
+                System.getProperty("os.name", ""), config.toolLimits().shellType(), workingDirectory));
+        sb.append('\n');
         sb.append("You are a coding agent working in the directory: ")
                 .append(workingDirectory).append('\n');
         sb.append("You can use the following tools:\n");

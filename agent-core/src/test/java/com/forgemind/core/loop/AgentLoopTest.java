@@ -118,4 +118,74 @@ class AgentLoopTest {
         assertTrue(system.contains("echo"));
         assertTrue(system.contains(tempDir.toString()));
     }
+
+    @Test
+    void systemPromptContainsEnvironmentBlock() {
+        StubLlmClient stub = new StubLlmClient(AgentResponse.finalAnswer("ok"));
+        newLoop(stub, AgentConfig.defaults()).run("task");
+        String system = stub.calls().get(0).get(0).content();
+        // 环境块：OS / Shell / 工作目录（本机 Windows + 默认 CMD）
+        assertTrue(system.contains("Environment:"));
+        assertTrue(system.contains("Windows"));
+        assertTrue(system.contains("cmd.exe"));
+        assertTrue(system.contains(tempDir.toAbsolutePath().normalize().toString()));
+        // 失败诊断规则与防重复规则
+        assertTrue(system.contains("inspect the returned stderr/output"));
+        assertTrue(system.contains("Do not blindly repeat the same or equivalent command."));
+    }
+
+    private static AgentResponse echoCall(String id) {
+        return AgentResponse.withToolCalls(null,
+                List.of(ToolCall.of(id, "echo", Map.of("text", "hi"))));
+    }
+
+    private static int countUserMessages(List<ChatMessage> messages, String keyword) {
+        return (int) messages.stream()
+                .filter(m -> m.role() == Role.USER && m.content() != null && m.content().contains(keyword))
+                .count();
+    }
+
+    @Test
+    void budgetHintNotInjectedWithSixRemaining() {
+        // maxIterations=7：第 1 轮剩余 6 轮未到阈值（≤5），不注入；第 2 轮剩余 5 轮才触发
+        StubLlmClient stub = new StubLlmClient(
+                echoCall("c1"), echoCall("c2"), AgentResponse.finalAnswer("done"));
+        AgentResult result = newLoop(stub, new AgentConfig(7)).run("task");
+        assertTrue(result.finished());
+        // 第 1 次 LLM 调用：第 1 轮 remaining=6，无 hint
+        assertEquals(0, countUserMessages(stub.calls().get(0), "Iteration budget is nearly exhausted"));
+        // 第 2 次 LLM 调用：第 2 轮 remaining=5，已注入
+        assertEquals(1, countUserMessages(stub.calls().get(1), "Iteration budget is nearly exhausted"));
+    }
+
+    @Test
+    void budgetHintInjectedWithFiveRemaining() {
+        // maxIterations=6：第 1 轮剩余 5 轮，触发收尾提示
+        StubLlmClient stub = new StubLlmClient(echoCall("c1"), AgentResponse.finalAnswer("done"));
+        AgentResult result = newLoop(stub, new AgentConfig(6)).run("task");
+        assertTrue(result.finished());
+        List<ChatMessage> second = stub.calls().get(1);
+        assertEquals(1, countUserMessages(second, "Iteration budget is nearly exhausted"));
+    }
+
+    @Test
+    void budgetHintInjectedWhenBudgetSmall() {
+        // maxIterations=2：第 1 轮剩余 1 轮，小预算也要尽早收尾
+        StubLlmClient stub = new StubLlmClient(echoCall("c1"), AgentResponse.finalAnswer("done"));
+        AgentResult result = newLoop(stub, new AgentConfig(2)).run("task");
+        assertTrue(result.finished());
+        List<ChatMessage> second = stub.calls().get(1);
+        assertEquals(1, countUserMessages(second, "Iteration budget is nearly exhausted"));
+    }
+
+    @Test
+    void budgetHintInjectedOnlyOnce() {
+        // 只注入一次，避免每轮重复增加 token
+        StubLlmClient stub = new StubLlmClient(
+                echoCall("c1"), echoCall("c2"), echoCall("c3"), AgentResponse.finalAnswer("done"));
+        AgentResult result = newLoop(stub, new AgentConfig(6)).run("task");
+        assertTrue(result.finished());
+        List<ChatMessage> last = stub.calls().get(stub.calls().size() - 1);
+        assertEquals(1, countUserMessages(last, "Iteration budget is nearly exhausted"));
+    }
 }

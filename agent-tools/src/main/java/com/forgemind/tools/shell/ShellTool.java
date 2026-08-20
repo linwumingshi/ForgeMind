@@ -44,8 +44,18 @@ public final class ShellTool implements AgentTool {
 
     @Override
     public String description() {
-        return "Execute a shell command in the workspace directory. "
+        String base = "Execute a shell command in the workspace directory. "
                 + "Returns exit code, stdout and stderr.";
+        // 环境提示：Windows 上经 cmd.exe 执行，避免模型按 Unix 习惯写命令（环境信息主体在 system prompt）
+        if (isWindows()) {
+            base += " On Windows this runs via cmd.exe; use Windows-compatible syntax "
+                    + "and backslash paths.";
+        }
+        return base;
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
     }
 
     @Override

@@ -21,3 +21,6 @@ Thumbs.db
 # Local config / secrets
 *.local.yml
 .env
+
+# Agent tool workspaces
+.workbuddy/

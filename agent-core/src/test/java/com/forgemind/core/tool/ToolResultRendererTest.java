@@ -27,6 +27,38 @@ class ToolResultRendererTest {
     }
 
     @Test
+    void failureKeepsOutputWithStderr() {
+        // ShellTool 失败时 output 已包含 stdout 与 [stderr] 分节，Renderer 不得丢弃
+        ToolResult result = new ToolResult(null, false,
+                "stdout line\n[stderr]\nerror line", "exit code: 1", 1, false);
+        String text = ToolResultRenderer.render(result, "shell", 1000);
+        assertTrue(text.contains("ERROR: exit code: 1"));
+        assertTrue(text.contains("Output:"));
+        assertTrue(text.contains("stdout line"));
+        assertTrue(text.contains("[stderr]"));
+        assertTrue(text.contains("error line"));
+    }
+
+    @Test
+    void failureWithNullOutputShowsPlaceholder() {
+        // 非 shell 工具失败（output=null）不得产生空节
+        String text = ToolResultRenderer.render(ToolResult.failure("boom"), "fail", 1000);
+        assertTrue(text.contains("ERROR: boom"));
+        assertTrue(text.contains("Output:"));
+        assertTrue(text.contains("(no output)"));
+    }
+
+    @Test
+    void failurePreservesExitCodeAndTruncated() {
+        ToolResult result = new ToolResult(null, false,
+                "partial\n[stderr]\nerr", "exit code: 2", 2, true);
+        String text = ToolResultRenderer.render(result, "shell", 1000);
+        assertTrue(text.contains("[exitCode: 2]"));
+        assertTrue(text.contains("[truncated: true]"));
+        assertTrue(text.contains("ERROR: exit code: 2"));
+    }
+
+    @Test
     void emptyOutputShowsNoOutputPlaceholder() {
         String text = ToolResultRenderer.render(ToolResult.success(null), "list_files", 1000);
         assertTrue(text.contains("(no output)"));

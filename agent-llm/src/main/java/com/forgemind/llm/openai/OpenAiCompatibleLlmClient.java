@@ -106,7 +106,7 @@ public final class OpenAiCompatibleLlmClient implements LlmClient, LlmStreamClie
                 throw new LlmException("LLM API error: HTTP " + status + " - " + extractError(response.body()));
             }
             attempt++;
-            log.info("LLM API retry {}/{} for HTTP {}", attempt, retryPolicy.maxRetries(), status);
+            log.debug("LLM API retry {}/{} for HTTP {}", attempt, retryPolicy.maxRetries(), status);
             sleeper.sleep(retryPolicy.backoffFor(attempt));
         }
     }
@@ -200,7 +200,7 @@ public final class OpenAiCompatibleLlmClient implements LlmClient, LlmStreamClie
             } catch (IOException e) {
                 if (attempt < retryPolicy.maxRetries()) {
                     attempt++;
-                    log.info("LLM stream retry {}/{} after IO failure", attempt, retryPolicy.maxRetries());
+                    log.debug("LLM stream retry {}/{} after IO failure", attempt, retryPolicy.maxRetries());
                     sleeper.sleep(retryPolicy.backoffFor(attempt));
                     continue;
                 }
@@ -218,7 +218,7 @@ public final class OpenAiCompatibleLlmClient implements LlmClient, LlmStreamClie
                 throw new LlmException("LLM API error: HTTP " + status + " - " + extractError(errorBody));
             }
             attempt++;
-            log.info("LLM stream retry {}/{} for HTTP {}", attempt, retryPolicy.maxRetries(), status);
+            log.debug("LLM stream retry {}/{} for HTTP {}", attempt, retryPolicy.maxRetries(), status);
             sleeper.sleep(retryPolicy.backoffFor(attempt));
         }
     }

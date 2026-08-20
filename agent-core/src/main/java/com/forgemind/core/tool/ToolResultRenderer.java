@@ -28,7 +28,17 @@ public final class ToolResultRenderer {
         if (result.success()) {
             body = result.output() == null ? "(no output)" : result.output();
         } else {
-            body = "ERROR: " + (result.error() == null ? "unknown error" : result.error());
+            // 失败分支必须保留完整 output（ShellTool 已把 stdout 与 [stderr] 分节合并进 output），
+            // 否则 LLM 看不到真实 stderr，只能盲目换命令重试（浪费迭代预算）。
+            StringBuilder fb = new StringBuilder("ERROR: ")
+                    .append(result.error() == null ? "unknown error" : result.error());
+            String output = result.output();
+            if (output == null || output.isEmpty()) {
+                fb.append("\n\nOutput:\n(no output)");
+            } else {
+                fb.append("\n\nOutput:\n").append(output);
+            }
+            body = fb.toString();
         }
 
         boolean truncated = result.truncated();
