@@ -118,12 +118,15 @@ class ForgemindCommandTest {
     /** --provider/--base-url/--model/--api-key 必须传递到 llmFactory 收到的 cfg。 */
     @Test
     void llmConfigOptionsReachLlmFactory() {
+        java.nio.file.Path userHome = tempDir.resolve("home-cli-overrides");
         CapturingFactory factory = new CapturingFactory();
         ForgemindCommand cmd = new ForgemindCommand(cfg -> {
             factory.cfg = cfg;
             return new FakeLlmClient().then(AgentResponse.finalAnswer("ok"));
         }, file -> new com.forgemind.cli.config.ConfigLoader.Loaded(
                 AgentConfig.defaults(), null),
+                s -> new com.forgemind.cli.config.UserConfigStore(
+                        userHome.resolve(".forgemind/config.yml")),
                 new PrintStream(new ByteArrayOutputStream()), new ByteArrayInputStream(new byte[0]));
         int exit = new CommandLine(cmd).execute(
                 "--provider", "deepseek", "--model", "deepseek-chat",
@@ -137,17 +140,20 @@ class ForgemindCommandTest {
     /** 无 --base-url 时 provider 默认 baseUrl 应生效（用户无需改源码）。 */
     @Test
     void providerDefaultBaseUrlUsedWithoutExplicitBaseUrl() {
+        java.nio.file.Path userHome = tempDir.resolve("home-provider-default");
         CapturingFactory factory = new CapturingFactory();
         ForgemindCommand cmd = new ForgemindCommand(cfg -> {
             factory.cfg = cfg;
             return new FakeLlmClient().then(AgentResponse.finalAnswer("ok"));
         }, file -> new com.forgemind.cli.config.ConfigLoader.Loaded(
                 AgentConfig.defaults(), null),
+                s -> new com.forgemind.cli.config.UserConfigStore(
+                        userHome.resolve(".forgemind/config.yml")),
                 new PrintStream(new ByteArrayOutputStream()), new ByteArrayInputStream(new byte[0]));
         int exit = new CommandLine(cmd).execute(
                 "--provider", "deepseek", "--model", "deepseek-chat", "--yes", "t");
         assertEquals(0, exit);
-        assertEquals("https://api.deepseek.com/v1", factory.cfg.baseUrl());
+        assertEquals("https://api.deepseek.com", factory.cfg.baseUrl());
         assertEquals("deepseek-chat", factory.cfg.model());
     }
 
@@ -182,7 +188,7 @@ class ForgemindCommandTest {
         com.forgemind.cli.config.UserConfigStore store = new com.forgemind.cli.config.UserConfigStore(
                 userHome.resolve(".forgemind/config.yml"));
         store.save(new com.forgemind.cli.config.UserConfigStore.UserConfig(
-                "deepseek", "test-key", "https://api.deepseek.com/v1", "deepseek-chat",
+                "deepseek", "test-key", "https://api.deepseek.com", "deepseek-chat",
                 null, null));
         CapturingFactory factory = new CapturingFactory();
         ForgemindCommand cmd = commandWithConfiguredStore(store, "", cfg -> {
@@ -191,7 +197,7 @@ class ForgemindCommandTest {
         });
         int exit = new CommandLine(cmd).execute("--yes", "task");
         assertEquals(0, exit);
-        assertEquals("https://api.deepseek.com/v1", factory.cfg.baseUrl());
+        assertEquals("https://api.deepseek.com", factory.cfg.baseUrl());
         assertEquals("deepseek-chat", factory.cfg.model());
         assertEquals("test-key", factory.cfg.apiKey());
     }
@@ -242,7 +248,7 @@ class ForgemindCommandTest {
         com.forgemind.cli.config.UserConfigStore store = new com.forgemind.cli.config.UserConfigStore(
                 userHome.resolve(".forgemind/config.yml"));
         store.save(new com.forgemind.cli.config.UserConfigStore.UserConfig(
-                "deepseek", "test-key", "https://api.deepseek.com/v1", "deepseek-chat",
+                "deepseek", "test-key", "https://api.deepseek.com", "deepseek-chat",
                 null, null));
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         ForgemindCommand cmd = new ForgemindCommand(
@@ -256,7 +262,7 @@ class ForgemindCommandTest {
         assertEquals(0, exit);
         String text = buffer.toString(StandardCharsets.UTF_8);
         assertTrue(text.contains("Provider: deepseek"));
-        assertTrue(text.contains("Base URL: https://api.deepseek.com/v1"));
+        assertTrue(text.contains("Base URL: https://api.deepseek.com"));
         assertTrue(text.contains("Model: deepseek-chat"));
         assertTrue(text.contains("API Key: configured"));
         assertFalse(text.contains("test-key"), "config-show 不得输出真实 Key");
@@ -269,7 +275,7 @@ class ForgemindCommandTest {
         com.forgemind.cli.config.UserConfigStore store = new com.forgemind.cli.config.UserConfigStore(
                 userHome.resolve(".forgemind/config.yml"));
         store.save(new com.forgemind.cli.config.UserConfigStore.UserConfig(
-                "deepseek", null, "https://api.deepseek.com/v1", "deepseek-chat", null, null));
+                "deepseek", null, "https://api.deepseek.com", "deepseek-chat", null, null));
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         // 用 CLI --api-key 模拟 env 来源（test-secret-key）
         ForgemindCommand cmd = new ForgemindCommand(
@@ -293,7 +299,7 @@ class ForgemindCommandTest {
         com.forgemind.cli.config.UserConfigStore store = new com.forgemind.cli.config.UserConfigStore(
                 userHome.resolve(".forgemind/config.yml"));
         store.save(new com.forgemind.cli.config.UserConfigStore.UserConfig(
-                "deepseek", "test-key", "https://api.deepseek.com/v1", "deepseek-chat", null, null));
+                "deepseek", "test-key", "https://api.deepseek.com", "deepseek-chat", null, null));
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         ForgemindCommand cmd = new ForgemindCommand(
                 cfg -> new FakeLlmClient().then(AgentResponse.finalAnswer("ok")),

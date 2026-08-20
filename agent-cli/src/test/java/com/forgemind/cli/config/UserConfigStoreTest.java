@@ -47,7 +47,7 @@ class UserConfigStoreTest {
         UserConfigStore store = store();
         assertFalse(store.exists());
         store.save(new UserConfigStore.UserConfig("deepseek", "test-key",
-                "https://api.deepseek.com/v1", "deepseek-chat",
+                "https://api.deepseek.com", "deepseek-chat",
                 Duration.ofSeconds(10), Duration.ofSeconds(60)));
         assertTrue(store.exists(), "保存应自动创建配置目录与文件");
         assertTrue(Files.exists(tempDir.resolve(".forgemind/config.yml")));
@@ -73,12 +73,12 @@ class UserConfigStoreTest {
         Files.createDirectories(tempDir.resolve(".forgemind"));
         Files.writeString(tempDir.resolve(".forgemind/config.yml"), """
                 provider: deepseek
-                baseUrl: https://api.deepseek.com/v1
+                baseUrl: https://api.deepseek.com
                 model: deepseek-chat
                 """, StandardCharsets.UTF_8);
         UserConfigStore.UserConfig loaded = store().load();
         assertEquals("deepseek", loaded.provider());
-        assertEquals("https://api.deepseek.com/v1", loaded.baseUrl());
+        assertEquals("https://api.deepseek.com", loaded.baseUrl());
         assertNull(loaded.apiKey(), "缺省 apiKey 应为 null");
     }
 
@@ -88,7 +88,7 @@ class UserConfigStoreTest {
         Files.writeString(tempDir.resolve(".forgemind/config.yml"), """
                 provider: deepseek
                 apiKey: ${FORGEMIND_API_KEY}
-                baseUrl: https://api.deepseek.com/v1
+                baseUrl: https://api.deepseek.com
                 model: deepseek-chat
                 """, StandardCharsets.UTF_8);
         UserConfigStore store = new UserConfigStore(tempDir.resolve(".forgemind/config.yml"));
@@ -109,11 +109,11 @@ class UserConfigStoreTest {
     @Test
     void isCompleteDetectsFullConfig() {
         UserConfigStore.UserConfig full = new UserConfigStore.UserConfig(
-                "deepseek", "test-key", "https://api.deepseek.com/v1", "deepseek-chat",
+                "deepseek", "test-key", "https://api.deepseek.com", "deepseek-chat",
                 null, null);
         assertTrue(full.isComplete());
         assertFalse(new UserConfigStore.UserConfig("deepseek", null,
-                "https://api.deepseek.com/v1", "deepseek-chat", null, null).isComplete());
+                "https://api.deepseek.com", "deepseek-chat", null, null).isComplete());
     }
 
     @Test
@@ -122,7 +122,7 @@ class UserConfigStoreTest {
         // 但 store 的任何错误/路径信息不得包含 Key。
         UserConfigStore store = store();
         store.save(new UserConfigStore.UserConfig("deepseek", "test-key",
-                "https://api.deepseek.com/v1", "deepseek-chat", null, null));
+                "https://api.deepseek.com", "deepseek-chat", null, null));
         String content = new String(Files.readAllBytes(store.configPath()), StandardCharsets.UTF_8);
         assertTrue(content.contains("test-key"), "用户级文件允许保存 Key（本阶段设计）");
         assertFalse(store.configPath().toString().contains("test-key"));

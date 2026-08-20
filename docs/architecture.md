@@ -656,7 +656,7 @@ agent:
 
   llm:
     provider: openai-compatible     # openai-compatible | fake(测试)
-    base-url: ${AGENT_BASE_URL:https://api.deepseek.com/v1}
+    base-url: ${AGENT_BASE_URL:https://api.deepseek.com}
     api-key: ${AGENT_API_KEY}       # 仅环境变量注入，禁止硬编码
     model: deepseek-chat
     temperature: 0.2

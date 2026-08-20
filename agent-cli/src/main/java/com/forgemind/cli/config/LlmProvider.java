@@ -13,14 +13,14 @@ import java.util.Locale;
  *
  * <ul>
  *   <li>{@code openai}：baseUrl=https://api.openai.com/v1，model=gpt-4o-mini；</li>
- *   <li>{@code deepseek}：baseUrl=https://api.deepseek.com/v1，model=deepseek-chat；</li>
+ *   <li>{@code deepseek}：baseUrl=https://api.deepseek.com，model=deepseek-chat；</li>
  *   <li>{@code custom}：baseUrl 与 model 必须由用户提供（默认值为 null）。</li>
  * </ul>
  */
 public enum LlmProvider {
 
     OPENAI("https://api.openai.com/v1", "gpt-4o-mini"),
-    DEEPSEEK("https://api.deepseek.com/v1", "deepseek-chat"),
+    DEEPSEEK("https://api.deepseek.com", "deepseek-chat"),
     CUSTOM(null, null);
 
     private final String defaultBaseUrl;

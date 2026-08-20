@@ -40,10 +40,10 @@ class LlmConfigTest {
     void withersAreImmutable() {
         LlmConfig base = LlmConfig.defaults();
         LlmConfig changed = base.withApiKey("secret-key").withModel("deepseek-chat")
-                .withBaseUrl("https://api.deepseek.com/v1");
+                .withBaseUrl("https://api.deepseek.com");
         assertNull(base.apiKey());
         assertEquals("secret-key", changed.apiKey());
         assertEquals("deepseek-chat", changed.model());
-        assertEquals("https://api.deepseek.com/v1", changed.baseUrl());
+        assertEquals("https://api.deepseek.com", changed.baseUrl());
     }
 }

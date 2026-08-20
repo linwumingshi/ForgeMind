@@ -20,7 +20,7 @@ agent:
     shellType: cmd
 
 llm:
-  baseUrl: https://api.deepseek.com/v1
+  baseUrl: https://api.deepseek.com
   apiKey: ${FORGEMIND_API_KEY}
   model: deepseek-chat
   connectTimeout: PT10S

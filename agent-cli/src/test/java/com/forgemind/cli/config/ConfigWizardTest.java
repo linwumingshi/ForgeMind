@@ -55,7 +55,7 @@ class ConfigWizardTest {
         UserConfigStore.UserConfig cfg = wizard(io).run(null);
         assertEquals("deepseek", cfg.provider());
         assertEquals("test-key", cfg.apiKey());
-        assertEquals("https://api.deepseek.com/v1", cfg.baseUrl());
+        assertEquals("https://api.deepseek.com", cfg.baseUrl());
         assertEquals("deepseek-chat", cfg.model());
     }
 
@@ -103,7 +103,7 @@ class ConfigWizardTest {
     @Test
     void blankApiKeyKeepsExisting() {
         UserConfigStore.UserConfig existing = new UserConfigStore.UserConfig(
-                "deepseek", "existing-key", "https://api.deepseek.com/v1", "deepseek-chat", null, null);
+                "deepseek", "existing-key", "https://api.deepseek.com", "deepseek-chat", null, null);
         FakeIo io = new FakeIo("", "", "", ""); // 全部回车 = 用默认/现有
         UserConfigStore.UserConfig cfg = wizard(io).run(existing);
         assertEquals("existing-key", cfg.apiKey(), "空 Key 输入应保留现有 Key");

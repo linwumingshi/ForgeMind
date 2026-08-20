@@ -45,7 +45,7 @@ class LlmConfigResolverTest {
         LlmConfig cfg = resolve(
                 new LlmConfigResolver.CliOverrides("deepseek", null, null, null),
                 NO_ENV, null);
-        assertEquals("https://api.deepseek.com/v1", cfg.baseUrl());
+        assertEquals("https://api.deepseek.com", cfg.baseUrl());
         assertEquals("deepseek-chat", cfg.model());
     }
 
@@ -109,7 +109,7 @@ class LlmConfigResolverTest {
         LlmConfig cfg = resolve(
                 new LlmConfigResolver.CliOverrides("deepseek", null, null, "my-model"),
                 NO_ENV, null);
-        assertEquals("https://api.deepseek.com/v1", cfg.baseUrl());
+        assertEquals("https://api.deepseek.com", cfg.baseUrl());
         assertEquals("my-model", cfg.model());
     }
 
@@ -130,7 +130,7 @@ class LlmConfigResolverTest {
         LlmConfig cfg = resolve(NO_CLI,
                 new LlmConfigResolver.EnvOverrides("deepseek", null, null, null),
                 null);
-        assertEquals("https://api.deepseek.com/v1", cfg.baseUrl());
+        assertEquals("https://api.deepseek.com", cfg.baseUrl());
         assertEquals("deepseek-chat", cfg.model());
     }
 
@@ -184,7 +184,7 @@ class LlmConfigResolverTest {
         LlmConfig cfg = resolve(NO_CLI,
                 new LlmConfigResolver.EnvOverrides("deepseek", null, null, null),
                 null);
-        assertEquals("https://api.deepseek.com/v1", cfg.baseUrl(), "provider 默认 baseUrl");
+        assertEquals("https://api.deepseek.com", cfg.baseUrl(), "provider 默认 baseUrl");
         assertEquals("deepseek-chat", cfg.model(), "provider 默认 model");
     }
 
@@ -200,12 +200,12 @@ class LlmConfigResolverTest {
 
     private static final UserConfigStore.UserConfig DEEPSEEK_USER =
             new UserConfigStore.UserConfig("deepseek", "user-key",
-                    "https://api.deepseek.com/v1", "deepseek-chat", null, null);
+                    "https://api.deepseek.com", "deepseek-chat", null, null);
 
     @Test
     void userConfigProviderWorks() {
         LlmConfig cfg = LlmConfigResolver.resolve(NO_CLI, NO_ENV, null, DEEPSEEK_USER, null, null);
-        assertEquals("https://api.deepseek.com/v1", cfg.baseUrl());
+        assertEquals("https://api.deepseek.com", cfg.baseUrl());
         assertEquals("deepseek-chat", cfg.model());
         assertEquals("user-key", cfg.apiKey());
     }
@@ -251,7 +251,7 @@ class LlmConfigResolverTest {
         LlmConfig cfg = LlmConfigResolver.resolve(
                 new LlmConfigResolver.CliOverrides("openai", null, null, null),
                 NO_ENV, null, DEEPSEEK_USER, null, null);
-        assertEquals("https://api.deepseek.com/v1", cfg.baseUrl(),
+        assertEquals("https://api.deepseek.com", cfg.baseUrl(),
                 "用户显式 baseUrl 不被 CLI provider 覆盖");
         assertEquals("deepseek-chat", cfg.model(), "用户显式 model 不被 CLI provider 覆盖");
         assertEquals("user-key", cfg.apiKey());
@@ -304,7 +304,7 @@ class LlmConfigResolverTest {
                 new LlmConfig("https://cfg/v1", "cfg-key", "cfg-model",
                         Duration.ofSeconds(5), Duration.ofSeconds(5)),
                 DEEPSEEK_USER, null, null);
-        assertEquals("https://api.deepseek.com/v1", cfg.baseUrl(), "用户配置覆盖显式 --config");
+        assertEquals("https://api.deepseek.com", cfg.baseUrl(), "用户配置覆盖显式 --config");
         assertEquals("user-key", cfg.apiKey());
         assertEquals("deepseek-chat", cfg.model());
     }

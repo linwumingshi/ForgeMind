@@ -41,7 +41,7 @@ class ConfigReporterTest {
     }
 
     private static LlmConfig fullConfig() {
-        return new LlmConfig("https://api.deepseek.com/v1", SECRET, "deepseek-chat",
+        return new LlmConfig("https://api.deepseek.com", SECRET, "deepseek-chat",
                 Duration.ofSeconds(5), Duration.ofSeconds(5));
     }
 
@@ -53,7 +53,7 @@ class ConfigReporterTest {
         c.reporter.showConfig(fullConfig());
         String text = c.text();
         assertTrue(text.contains("Provider: deepseek"));
-        assertTrue(text.contains("Base URL: https://api.deepseek.com/v1"));
+        assertTrue(text.contains("Base URL: https://api.deepseek.com"));
         assertTrue(text.contains("Model: deepseek-chat"));
         assertTrue(text.contains("API Key: configured"));
         assertFalse(text.contains(SECRET), "涓嶅緱杈撳嚭瀹屾暣 Key");
@@ -64,7 +64,7 @@ class ConfigReporterTest {
     @Test
     void showConfigMissingKeySaysNotConfigured() {
         Captured c = new Captured();
-        c.reporter.showConfig(new LlmConfig("https://api.deepseek.com/v1", null, "m",
+        c.reporter.showConfig(new LlmConfig("https://api.deepseek.com", null, "m",
                 Duration.ofSeconds(5), Duration.ofSeconds(5)));
         assertTrue(c.text().contains("API Key: not configured"));
     }

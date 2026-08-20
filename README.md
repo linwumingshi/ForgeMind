@@ -129,7 +129,7 @@ $env:FORGEMIND_API_KEY = "sk-..."
 
 ```yaml
 llm:
-  baseUrl: https://api.deepseek.com/v1   # 或 OpenAI 官方
+  baseUrl: https://api.deepseek.com   # 或 OpenAI 官方
   apiKey: ${FORGEMIND_API_KEY}           # 仅环境变量注入
   model: deepseek-chat
 ```

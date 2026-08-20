@@ -37,7 +37,7 @@ class ConfigLoaderTest {
                     readFileMaxBytes: 2048
                     shellTimeout: PT30S
                 llm:
-                  baseUrl: https://api.deepseek.com/v1
+                  baseUrl: https://api.deepseek.com
                   apiKey: ${FORGEMIND_API_KEY}
                   model: deepseek-chat
                   connectTimeout: 5
@@ -47,7 +47,7 @@ class ConfigLoaderTest {
         assertEquals(20, loaded.agent().maxIterations());
         assertEquals(2048, loaded.agent().toolLimits().readFileMaxBytes());
         assertEquals(Duration.ofSeconds(30), loaded.agent().toolLimits().shellTimeout());
-        assertEquals("https://api.deepseek.com/v1", loaded.llm().baseUrl());
+        assertEquals("https://api.deepseek.com", loaded.llm().baseUrl());
         assertEquals("env-secret", loaded.llm().apiKey());
         assertEquals("deepseek-chat", loaded.llm().model());
         assertEquals(Duration.ofSeconds(5), loaded.llm().connectTimeout());
