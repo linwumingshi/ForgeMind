@@ -76,4 +76,30 @@ class ForgemindAppTest {
                 .run(fakeAgent(), null, tempDir);
         assertEquals(1, 1); // 空行不触发任务，正常退出
     }
+
+    // ---------- P2.4：REPL 多轮 verbose 状态 ----------
+
+    @Test
+    void replVerboseStatePersistsAcrossTurns() {
+        // verbose 是 CLI session 级别：setVerbose(true) 后 REPL 每轮都显示中间文本与 tool output；
+        // reset() 只归零 tool 序号，不清除 verbose。
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        Scanner scanner = new Scanner(new ByteArrayInputStream(
+                "task one\ntask two\nexit\n".getBytes(StandardCharsets.UTF_8)), StandardCharsets.UTF_8);
+        StreamingProgressRenderer renderer = new StreamingProgressRenderer(
+                new PrintStream(buffer, true, StandardCharsets.UTF_8));
+        renderer.setVerbose(true);
+        // FakeLlmClient 是 LlmStreamClient：最终答案经 delta 事件 → verbose 下实时输出
+        FakeLlmClient fake = new FakeLlmClient()
+                .then(AgentResponse.finalAnswer("answer one"))
+                .then(AgentResponse.finalAnswer("answer two"));
+        com.forgemind.core.Agent agent = CliAssembly.buildAgent(AgentConfig.defaults(), fake,
+                tempDir, (PermissionAnswerer) req -> false, renderer);
+        new ForgemindApp(new PrintStream(buffer, true, StandardCharsets.UTF_8), scanner, renderer)
+                .run(agent, null, tempDir);
+        String out = buffer.toString(StandardCharsets.UTF_8);
+        // 两轮 finalAnswer 均完整输出（REPL 两轮都执行成功）
+        assertTrue(out.contains("answer one"), "第一轮 finalAnswer 应输出: " + out);
+        assertTrue(out.contains("answer two"), "第二轮 finalAnswer 应输出: " + out);
+    }
 }

@@ -68,4 +68,40 @@ class CommandFailureTrackerTest {
         assertEquals(1, tracker.recordFailure("java demo.OrderDemo"));
         assertNull(CommandFailureTracker.hintFor(1));
     }
+
+    // ---------- P2.3：hint 文案增强（计数/归一/阈值行为不变，仅文案含诊断方向） ----------
+
+    @Test
+    void weakHintGivesCompileAndInspectionGuidance() {
+        String weak = CommandFailureTracker.hintFor(2);
+        assertTrue(weak.contains("inspect the previous stderr/output"),
+                "weak hint 应引导先看 stderr/output: " + weak);
+        assertTrue(weak.contains("compilation succeeded"),
+                "weak hint 应提示检查编译是否成功: " + weak);
+        assertTrue(weak.contains("package/classpath"),
+                "weak hint 应提示检查 package/classpath: " + weak);
+    }
+
+    @Test
+    void strongHintGivesDiagnosticAlternatives() {
+        String strong = CommandFailureTracker.hintFor(3);
+        assertTrue(strong.contains("changing the underlying approach"),
+                "strong hint 应要求改变方法: " + strong);
+        assertTrue(strong.contains("compilation/output results"),
+                "strong hint 应提示检查编译/输出结果: " + strong);
+        assertTrue(strong.contains("different diagnostic command"),
+                "strong hint 应提供其他诊断途径: " + strong);
+    }
+
+    @Test
+    void countingThresholdsUnchangedByHintEnhancement() {
+        // P2.3 只改文案：1 次无提示、2 次 weak、3 次 strong 的阈值行为必须原样
+        CommandFailureTracker tracker = new CommandFailureTracker();
+        assertEquals(1, tracker.recordFailure("cmd /c \"Java Demo\" 2>&1"));
+        assertNull(CommandFailureTracker.hintFor(1));
+        assertEquals(2, tracker.recordFailure("CMD /C java demo"));
+        assertTrue(CommandFailureTracker.hintFor(2).contains("failed repeatedly"));
+        assertEquals(3, tracker.recordFailure("java demo"));
+        assertTrue(CommandFailureTracker.hintFor(3).contains("Do not retry it again"));
+    }
 }

@@ -53,21 +53,21 @@ class ForgemindAppObservabilityTest {
         assertTrue(text.contains("iterations: 1  toolCalls: 0  subAgents: 0"));
     }
 
-    /** streaming 模式：delta 已实时输出 → 不重复打印 final answer 文本。 */
+    /** streaming 模式（P2.1）：delta 默认静默，最终答案完整输出一次，无 "(streamed above)"。 */
     @Test
-    void streamedOutputIsNotDuplicatedInFinalBlock() {
+    void streamedFinalAnswerPrintedOnceAndComplete() {
         Captured c = new Captured();
         StreamingProgressRenderer renderer = new StreamingProgressRenderer(c.out);
-        // FakeLlmClient 是 LlmStreamClient：答案经 delta 实时输出
+        // FakeLlmClient 是 LlmStreamClient：答案经 delta 事件，但默认模式不展示
         Agent agent = CliAssembly.buildAgent(AgentConfig.defaults(), finalAnswer("流式答案"),
                 tempDir, req -> false, renderer);
         new ForgemindApp(c.out, c.scanner, renderer).run(agent, "task", tempDir);
         String text = c.text();
-        assertTrue(text.contains("(streamed above)"), "流式模式 Final block 不应重复答案文本");
+        assertFalse(text.contains("(streamed above)"), "不应再出现 (streamed above) 占位: " + text);
+        assertTrue(text.contains("流式答案"), "最终答案应完整输出: " + text);
+        assertTrue(text.indexOf("流式答案") == text.lastIndexOf("流式答案"),
+                "final answer 只应输出一次: " + text);
         assertTrue(text.contains("status: success"));
-        // "流式答案" 只出现一次（delta），Final block 中不再出现
-        assertFalse(text.indexOf("流式答案") != text.lastIndexOf("流式答案"),
-                "final answer 不应重复输出: " + text);
     }
 
     /** cancelled 状态可从 CLI 判断。 */
@@ -106,7 +106,7 @@ class ForgemindAppObservabilityTest {
         String text = c.text();
         assertTrue(text.contains("status: success"),
                 "工具失败自纠后任务应成功: " + text);
-        assertTrue(text.contains("[tool: write_file] [failed]"),
-                "被拒工具应显示 [failed]: " + text);
+        assertTrue(text.contains("[1] write_file ✗"),
+                "被拒工具应显示序号失败标记: " + text);
     }
 }

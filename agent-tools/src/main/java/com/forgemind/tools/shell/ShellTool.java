@@ -45,11 +45,15 @@ public final class ShellTool implements AgentTool {
     @Override
     public String description() {
         String base = "Execute a shell command in the workspace directory. "
-                + "Returns exit code, stdout and stderr.";
+                + "Returns exit code, stdout and stderr. ";
+        // Java 最小可模仿范例（P2.3）：编译与运行是两个步骤，类名用点分隔、源码路径用目录分隔。
+        base += "Java example: compile first with 'javac -d . demo\\OrderDemo.java', "
+                + "then run with 'java demo.OrderDemo'. ";
         // 环境提示：Windows 上经 cmd.exe 执行，避免模型按 Unix 习惯写命令（环境信息主体在 system prompt）
         if (isWindows()) {
-            base += " On Windows this runs via cmd.exe; use Windows-compatible syntax "
-                    + "and backslash paths.";
+            base += "On Windows this runs via cmd.exe; use Windows-compatible syntax "
+                    + "and backslash paths. Do NOT use PowerShell Add-Type to compile Java "
+                    + "(Add-Type is a .NET command, not a Java compiler).";
         }
         return base;
     }

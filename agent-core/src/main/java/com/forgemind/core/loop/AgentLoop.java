@@ -204,7 +204,9 @@ public final class AgentLoop {
                 for (ToolCall call : response.toolCalls()) {
                     progress.onToolCallStarted(call.name());
                     ToolResult result = executor.execute(call.name(), call.arguments());
-                    progress.onToolResult(call.name(), result.success());
+                    // P2.1：携带完整 ToolResult 载荷（success/output/exitCode 等），
+                    // 供 CLI 渲染器展示失败 exitCode 与 stderr 摘要。
+                    progress.onToolResult(call.name(), result);
                     log.debug("tool '{}' -> success={} truncated={}",
                             call.name(), result.success(), result.truncated());
                     context.appendMessage(ChatMessage.tool(call.id(),
@@ -338,6 +340,15 @@ public final class AgentLoop {
                     log.warn("progress listener onToolResult ignored: {}", e.getMessage());
                 }
             }
+
+            @Override
+            public void onToolResult(String toolName, ToolResult result) {
+                try {
+                    delegate.onToolResult(toolName, result);
+                } catch (RuntimeException e) {
+                    log.warn("progress listener onToolResult ignored: {}", e.getMessage());
+                }
+            }
         };
     }
 
@@ -364,6 +375,10 @@ public final class AgentLoop {
         // 环境感知：OS / Shell / 工作目录 / 命令执行规则（避免模型按错误平台的命令习惯盲试）
         sb.append(EnvironmentInfo.describe(
                 System.getProperty("os.name", ""), config.toolLimits().shellType(), workingDirectory));
+        sb.append('\n');
+        // P2.3：Java 项目工作流规则（编译→运行 / package↔目录 / Add-Type 禁用 / 主类找不到诊断方向）
+        sb.append(EnvironmentInfo.javaProjectRules(
+                System.getProperty("os.name", ""), config.toolLimits().shellType()));
         sb.append('\n');
         sb.append("You are a coding agent working in the directory: ")
                 .append(workingDirectory).append('\n');

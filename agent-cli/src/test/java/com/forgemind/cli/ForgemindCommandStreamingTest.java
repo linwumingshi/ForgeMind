@@ -1,6 +1,7 @@
 package com.forgemind.cli;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.forgemind.cli.config.ConfigLoader;
@@ -49,7 +50,7 @@ class ForgemindCommandStreamingTest {
     }
 
     @Test
-    void streamingTaskPrintsDeltasAndToolMarkers() throws Exception {
+    void streamingTaskShowsToolMarkersAndFinalAnswer() throws Exception {
         Files.writeString(tempDir.resolve("a.txt"), "hello", StandardCharsets.UTF_8);
         FakeLlmClient fake = new FakeLlmClient()
                 .then(AgentResponse.withToolCalls("scanning the file",
@@ -60,13 +61,15 @@ class ForgemindCommandStreamingTest {
                 .execute("--working-dir", tempDir.toString(), "--yes", "read a.txt");
         assertEquals(0, exit);
         String text = captured.text();
-        // 文本增量实时输出（完整拼接 = 两轮 content）
-        assertTrue(text.contains("scanning the file"), "第一轮 text delta 应被渲染");
-        assertTrue(text.contains("read and done"), "第二轮 text delta 应被渲染");
-        // Tool 调用/结果展示
-        assertTrue(text.contains("[tool: read_file] [success]"), "Tool 生命周期应被渲染");
-        // 最终答案块仍由 ForgemindApp 统一输出
+        // P2.1 默认模式：中间 assistant 文本静默（不实时展示）
+        assertFalse(text.contains("scanning the file"), "默认模式不应输出中间 assistant 文本: " + text);
+        // Tool 生命周期：序号 + ✓
+        assertTrue(text.contains("[1] read_file ✓"), "Tool 应显示序号与成功标记: " + text);
+        // 最终答案块：完整 finalAnswer + 统计
         assertTrue(text.contains("-- Final answer --"));
+        assertTrue(text.contains("read and done"), "最终答案应完整输出: " + text);
+        assertTrue(text.indexOf("read and done") == text.lastIndexOf("read and done"),
+                "最终答案只输出一次: " + text);
         assertTrue(text.contains("iterations: 2  toolCalls: 1"));
     }
 
@@ -82,7 +85,7 @@ class ForgemindCommandStreamingTest {
                 .execute("--working-dir", tempDir.toString(), "--yes", "read missing");
         assertEquals(0, exit);
         String text = captured.text();
-        assertTrue(text.contains("[tool: read_file] [failed]"), "失败 Tool 应显示 [failed]");
+        assertTrue(text.contains("[1] read_file ✗"), "失败 Tool 应显示序号失败标记: " + text);
         assertTrue(text.contains("self corrected"));
     }
 
@@ -138,7 +141,7 @@ class ForgemindCommandStreamingTest {
     }
 
     @Test
-    void streamedFinalAnswerNotDuplicated() throws Exception {
+    void streamedFinalAnswerPrintedOnceComplete() throws Exception {
         FakeLlmClient fake = new FakeLlmClient()
                 .then(AgentResponse.finalAnswer("unique-final-42"));
         Captured captured = new Captured();
@@ -146,9 +149,75 @@ class ForgemindCommandStreamingTest {
                 .execute("--working-dir", tempDir.toString(), "--yes", "task");
         assertEquals(0, exit);
         String text = captured.text();
-        // streaming 已输出 delta：Final block 用占位，不重复文本
-        assertTrue(text.contains("(streamed above)"));
+        // P2.1：不再输出 "(streamed above)" 占位；最终答案完整输出且只出现一次
+        assertFalse(text.contains("(streamed above)"), "不应出现 (streamed above): " + text);
+        assertTrue(text.contains("unique-final-42"), "最终答案应完整输出: " + text);
         assertTrue(text.indexOf("unique-final-42") == text.lastIndexOf("unique-final-42"),
-                "final answer 只应出现一次（delta），不得重复: " + text);
+                "final answer 只应输出一次: " + text);
+    }
+
+    // ---------- P2.4：--verbose ----------
+
+    @Test
+    void verboseShowsIntermediateTextAndToolOutput() throws Exception {
+        Files.writeString(tempDir.resolve("a.txt"), "hello", StandardCharsets.UTF_8);
+        FakeLlmClient fake = new FakeLlmClient()
+                .then(AgentResponse.withToolCalls("scanning the file",
+                        List.of(ToolCall.of("c1", "read_file", Map.of("path", "a.txt")))))
+                .then(AgentResponse.finalAnswer("read and done"));
+        Captured captured = new Captured();
+        int exit = new CommandLine(commandWith(fake, captured))
+                .execute("--verbose", "--working-dir", tempDir.toString(), "--yes", "read a.txt");
+        assertEquals(0, exit);
+        String text = captured.text();
+        // verbose 显示 assistant 中间文本（默认模式静默）
+        assertTrue(text.contains("scanning the file"), "verbose 应显示中间 assistant 文本: " + text);
+        // verbose 缩进展示完整 tool output（read_file 返回文件内容）
+        assertTrue(text.contains("    hello"), "verbose 应缩进展示 tool output: " + text);
+        // 事件行仍按序号展示
+        assertTrue(text.contains("[1] read_file ✓"), "事件行格式不变: " + text);
+        // 最终答案完整输出一次
+        assertTrue(text.contains("-- Final answer --"));
+        assertTrue(text.contains("read and done"));
+        assertTrue(text.indexOf("read and done") == text.lastIndexOf("read and done"),
+                "final answer 只应输出一次: " + text);
+        assertTrue(text.contains("iterations: 2  toolCalls: 1"));
+    }
+
+    @Test
+    void verboseWithYesAndWorkingDirStillRuns() throws Exception {
+        Files.writeString(tempDir.resolve("a.txt"), "hello", StandardCharsets.UTF_8);
+        FakeLlmClient fake = new FakeLlmClient()
+                .then(AgentResponse.withToolCalls("inspecting",
+                        List.of(ToolCall.of("c1", "read_file", Map.of("path", "a.txt")))))
+                .then(AgentResponse.finalAnswer("done"));
+        Captured captured = new Captured();
+        int exit = new CommandLine(commandWith(fake, captured))
+                .execute("--verbose", "--yes", "--working-dir", tempDir.toString(), "read");
+        assertEquals(0, exit);
+        String text = captured.text();
+        assertTrue(text.contains("inspecting"), "verbose + --yes 组合应正常: " + text);
+        assertTrue(text.contains("[1] read_file ✓"));
+        assertTrue(text.contains("iterations: 2  toolCalls: 1"));
+    }
+
+    @Test
+    void verboseWithConfigFlagParsesAndRuns() throws Exception {
+        // --verbose 与 --config 可共存：config 由注入的 loader 提供，verbose 只影响展示
+        Files.writeString(tempDir.resolve("a.txt"), "hello", StandardCharsets.UTF_8);
+        FakeLlmClient fake = new FakeLlmClient()
+                .then(AgentResponse.withToolCalls("with config",
+                        List.of(ToolCall.of("c1", "read_file", Map.of("path", "a.txt")))))
+                .then(AgentResponse.finalAnswer("config done"));
+        Captured captured = new Captured();
+        Path cfgPath = tempDir.resolve("p24.yml");
+        int exit = new CommandLine(commandWith(fake, captured))
+                .execute("--verbose", "--config", cfgPath.toString(),
+                        "--working-dir", tempDir.toString(), "--yes", "read");
+        assertEquals(0, exit);
+        String text = captured.text();
+        assertTrue(text.contains("with config"), "verbose + --config 组合应正常: " + text);
+        assertTrue(text.contains("[1] read_file ✓"));
+        assertTrue(text.contains("config done"));
     }
 }

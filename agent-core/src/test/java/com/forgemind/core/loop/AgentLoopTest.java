@@ -134,6 +134,22 @@ class AgentLoopTest {
         assertTrue(system.contains("Do not blindly repeat the same or equivalent command."));
     }
 
+    @Test
+    void systemPromptContainsJavaProjectRules() {
+        // P2.3：system prompt 必须包含 Java 工作流指引（编译→运行 / package↔目录 / Add-Type 禁用 / 主类诊断）
+        StubLlmClient stub = new StubLlmClient(AgentResponse.finalAnswer("ok"));
+        newLoop(stub, AgentConfig.defaults()).run("task");
+        String system = stub.calls().get(0).get(0).content();
+        assertTrue(system.contains("Java project rules:"));
+        assertTrue(system.contains("javac -d . demo\\OrderDemo.java"),
+                "应包含 Windows 编译示例: " + system);
+        assertTrue(system.contains("java demo.OrderDemo"), "应包含运行类示例");
+        assertTrue(system.contains("package"), "应包含 package↔目录对应关系");
+        assertTrue(system.contains("Add-Type"), "应警告勿用 Add-Type 编译 Java");
+        assertTrue(system.contains("Could not find or load main class"),
+                "应包含主类找不到的诊断方向");
+    }
+
     private static AgentResponse echoCall(String id) {
         return AgentResponse.withToolCalls(null,
                 List.of(ToolCall.of(id, "echo", Map.of("text", "hi"))));

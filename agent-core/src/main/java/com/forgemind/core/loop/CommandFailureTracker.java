@@ -15,14 +15,17 @@ public final class CommandFailureTracker {
 
     /** 弱提示：同一命令第 2 次连续失败。 */
     private static final String WEAK_HINT =
-            "This command has failed repeatedly. Analyze the previous stderr/output "
-                    + "before retrying the same command.";
+            "This command has failed repeatedly. Do not blindly retry the same command: "
+                    + "first inspect the previous stderr/output to identify the actual failure cause. "
+                    + "If this is a compile/run issue, verify that compilation succeeded, "
+                    + "the class/output file exists, and the package/classpath is correct.";
 
     /** 强提示：同一命令第 3 次及以上连续失败。 */
     private static final String STRONG_HINT =
             "The same command has failed multiple times. Do not retry it again without changing "
-                    + "the underlying approach. Inspect the relevant files or use another "
-                    + "diagnostic method.";
+                    + "the underlying approach. Inspect the relevant files, the compilation/output "
+                    + "results, the package/classpath, or use a different diagnostic command "
+                    + "before trying again.";
 
     private final Map<String, Integer> consecutiveFailures = new HashMap<>();
 

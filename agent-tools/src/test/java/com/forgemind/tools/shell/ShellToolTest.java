@@ -10,6 +10,7 @@ import com.forgemind.core.context.ToolContext;
 import com.forgemind.core.fs.WorkspaceAccess;
 import com.forgemind.model.ToolResult;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -99,6 +100,79 @@ class ShellToolTest {
         ToolResult result = new ShellTool(limits).execute(ctx, Map.of("command", "   "));
         assertFalse(result.success());
         assertTrue(result.error().contains("command must not be empty"));
+    }
+
+    @Test
+    void descriptionContainsJavaWindowsExample() {
+        // P2.3：description 必须给模型可模仿的 Java Windows 最小范例
+        String desc = new ShellTool(limits).description();
+        assertTrue(desc.contains("javac -d . demo\\OrderDemo.java"),
+                "应包含 javac 编译示例: " + desc);
+        assertTrue(desc.contains("java demo.OrderDemo"), "应包含 java 运行示例: " + desc);
+        assertTrue(desc.contains("compile first"), "应说明先编译后运行: " + desc);
+        if (isWindows()) {
+            assertTrue(desc.contains("cmd.exe"), "Windows 应指明 cmd.exe: " + desc);
+            assertTrue(desc.contains("Add-Type"), "应警告勿用 PowerShell Add-Type 编译 Java: " + desc);
+        }
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase().contains("win");
+    }
+
+    // ---------- P2.3：真实 Windows Java 编译/运行场景 ----------
+
+    @Test
+    void javaCompileThenRunPackageWorkflow() throws IOException {
+        // 完整闭环：demo/OrderDemo.java (package demo) → javac -d . → java demo.OrderDemo → OK
+        Assumptions.assumeTrue(javacAvailable(), "javac not available on PATH, skipping");
+        Files.createDirectories(workspace.resolve("demo"));
+        Files.writeString(workspace.resolve("demo/OrderDemo.java"),
+                "package demo;\n"
+                        + "public class OrderDemo {\n"
+                        + "    public static void main(String[] args) {\n"
+                        + "        System.out.println(\"OK\");\n"
+                        + "    }\n"
+                        + "}\n",
+                StandardCharsets.UTF_8);
+        // 编译：javac -d . demo\OrderDemo.java
+        ToolResult compile = new ShellTool(limits).execute(ctx,
+                Map.of("command", "javac -d . demo\\OrderDemo.java"));
+        assertTrue(compile.success(), "javac 应成功: " + compile.error() + " / " + compile.output());
+        assertTrue(java.nio.file.Files.exists(workspace.resolve("demo/OrderDemo.class")),
+                "javac 应生成 .class 文件");
+        // 运行：java demo.OrderDemo（package-qualified）
+        ToolResult run = new ShellTool(limits).execute(ctx, Map.of("command", "java demo.OrderDemo"));
+        assertTrue(run.success(), "java 应成功: " + run.error() + " / " + run.output());
+        assertTrue(run.output().contains("OK"), "stdout 应包含 OK: " + run.output());
+    }
+
+    @Test
+    void javaRunWithoutCompileFailsWithStderr() throws IOException {
+        // 未编译直接 java demo.OrderDemo → 必须失败并携带 stderr（主类找不到）
+        Assumptions.assumeTrue(javacAvailable(), "javac not available on PATH, skipping");
+        Files.createDirectories(workspace.resolve("demo"));
+        Files.writeString(workspace.resolve("demo/OrderDemo.java"),
+                "package demo;\npublic class OrderDemo {\n"
+                        + "    public static void main(String[] args) { System.out.println(\"OK\"); }\n"
+                        + "}\n",
+                StandardCharsets.UTF_8);
+        ToolResult run = new ShellTool(limits).execute(ctx, Map.of("command", "java demo.OrderDemo"));
+        assertFalse(run.success(), "未编译直接运行必须失败");
+        assertEquals(1, run.exitCode());
+        assertTrue(run.output().contains("[stderr]"), "失败应携带 [stderr] 分节: " + run.output());
+        assertTrue(run.output().contains("找不到") || run.output().contains("Could not find")
+                        || run.output().contains("Error"),
+                "stderr 应含主类找不到类错误: " + run.output());
+    }
+
+    private static boolean javacAvailable() {
+        try {
+            Process p = new ProcessBuilder("javac", "-version").start();
+            return p.waitFor(10, TimeUnit.SECONDS) && p.exitValue() == 0;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     @Test

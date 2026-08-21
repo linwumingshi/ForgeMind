@@ -29,8 +29,8 @@
 
 - **传输层变化，领域逻辑不变**：`LlmStreamClient extends LlmClient`；AgentLoop 检测到流式能力自动走 `stream()`，否则回退 `chat()` —— 两种模式完全兼容，`chat()` 语义不退化。
 - **SSE 管线**：`OpenAiSseParser`（SSE→data）→ `OpenAiStreamAccumulator`（data→增量+完整响应）→ `StreamToolCallAccumulator`（tool_call 分片累积、arguments 一次性解析）。
-- **实时增量输出（CLI 可观测性，M9.4）**：`StreamingProgressRenderer` 逐字符打印文本 delta（每次 flush），Tool 调用/结果显示 `[tool: name] [success]` / `[failed]`；SubAgent 生命周期显示 `[subagent:start] task [complete]` / `[failed]`；连续事件不产生空行；超长 SubAgent 任务截断。
-- **最终摘要**：每次任务结束输出 `status: success / failed / cancelled`、`iterations` / `toolCalls` / `subAgents` 统计；streaming 模式 delta 已实时显示完整答案 → Final block 用 `(streamed above)` 占位，**不重复输出 final answer**；非 streaming 模式打印完整答案。
+- **实时增量输出（CLI 可观测性，M9.4 / P2.1）**：`StreamingProgressRenderer` 默认模式不展示 LLM 中间 assistant 文本（`--verbose` 未接线，后续阶段提供）；Tool 调用/结果按序号展示 `[1] list_files ✓` / `[2] shell ✗ exit=1`（失败时附一行 stderr 摘要）；SubAgent 生命周期显示 `[subagent:start] task [complete]` / `[failed]`；连续事件不产生空行；超长 SubAgent 任务截断。
+- **最终摘要**：每次任务结束输出 `status: success / failed / cancelled`、`iterations` / `toolCalls` / `subAgents` 统计；**最终答案永远由 `AgentResult.finalAnswer()` 完整输出且只输出一次**（不再使用 `(streamed above)` 占位）。
 - **delta 不进 Context**：AgentContext 只存完整 AssistantMessage（完整 content + 完整 tool_calls）与 ToolResult，tool_call_id 严格配对；增量仅供展示。
 - **流式 Retry**：仅 body 消费前重试（IO 失败 + 429/500/502/503/504）；2xx 且 SSE 已开始绝不重试。
 - **取消**：线程中断 → AgentLoop 在循环边界返回 `failed("cancelled")`；运行中的 Tool 不被打断（自然完成），后续不再调用 LLM。CLI 表现为 `status: cancelled`。

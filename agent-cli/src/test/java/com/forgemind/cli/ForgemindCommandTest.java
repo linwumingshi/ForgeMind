@@ -59,6 +59,22 @@ class ForgemindCommandTest {
     }
 
     @Test
+    void helpListsVerboseOption() {
+        // P2.4：--verbose 必须是已注册的 CLI 选项（Picocli 解析 + help 可见）
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        CommandLine cmdLine = new CommandLine(new ForgemindCommand(cfg -> new FakeLlmClient(),
+                file -> null, new PrintStream(out), new ByteArrayInputStream(new byte[0])));
+        cmdLine.setOut(new PrintWriter(out, true));
+        int exit = cmdLine.execute("--help");
+        assertEquals(0, exit);
+        String help = out.toString(StandardCharsets.UTF_8);
+        assertTrue(help.contains("--verbose"), "--help 应列出 --verbose: " + help);
+        // --verbose 与既有选项共存
+        assertTrue(help.contains("--yes"));
+        assertTrue(help.contains("--working-dir"));
+    }
+
+    @Test
     void runsSingleTaskModeWithWorkingDir() throws Exception {
         java.nio.file.Files.writeString(tempDir.resolve("a.txt"), "hello");
         FakeLlmClient fake = new FakeLlmClient()

@@ -11,8 +11,9 @@ import java.util.Scanner;
  * 与权限应答共享同一个 {@link Scanner}。
  *
  * <p>M9.4：可观测性摘要 —— 最终状态（success / failed / cancelled）、
- * iterations / toolCalls / subAgents 统计；streaming 模式（text delta 已实时
- * 输出）下不再重复打印 final answer 文本，避免重复输出。</p>
+ * iterations / toolCalls / subAgents 统计。
+ * P2.1：最终答案永远由 {@link AgentResult#finalAnswer()} 完整输出且只输出一次
+ * （不再输出 "(streamed above)" 占位；默认模式不实时展示中间 assistant 文本）。</p>
  */
 public final class ForgemindApp {
 
@@ -72,16 +73,20 @@ public final class ForgemindApp {
     }
 
     private void runOnce(Agent agent, String task) {
+        // P2.1：每次任务开始重置渲染器展示状态（tool 序号从 1 重新开始，REPL 多轮不续号）
+        if (renderer != null) {
+            renderer.reset();
+        }
         AgentResult result = agent.run(task);
-        boolean streamed = renderer != null && renderer.hasStreamedText();
+        // P2.4：丢弃 verbose 缓冲的 assistant 文本（最终答案由下方 Final block 完整输出一次）
+        if (renderer != null) {
+            renderer.finishRun();
+        }
         out.println();
         out.println("-- Final answer --");
-        if (streamed) {
-            // delta 已实时打印完整文本：不再重复，仅给出占位与统计
-            out.println("(streamed above)");
-        } else {
-            out.println(result.finalAnswer() == null ? "(none)" : result.finalAnswer());
-        }
+        // 最终答案永远由 AgentResult.finalAnswer() 完整输出且只输出一次；
+        // 不再输出 "(streamed above)" 占位（默认模式不实时展示中间文本）。
+        out.println(result.finalAnswer() == null ? "(none)" : result.finalAnswer());
         out.println("status: " + statusOf(result));
         if (!result.finished()) {
             out.println("[not finished] " + (result.error() == null ? "" : result.error()));

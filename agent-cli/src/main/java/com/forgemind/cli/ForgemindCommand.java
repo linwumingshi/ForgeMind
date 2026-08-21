@@ -41,6 +41,10 @@ public final class ForgemindCommand implements Callable<Integer> {
     @Option(names = "--yes", description = "Auto-approve all permission requests")
     private boolean yes;
 
+    /** P2.4：verbose 模式 —— 展示 assistant 中间文本与完整 tool output（仅展示层，不改变 Agent 行为）。 */
+    @Option(names = "--verbose", description = "Show assistant intermediate text and full tool output")
+    private boolean verbose;
+
     @Option(names = "--config", description = "Path to YAML config file")
     private Path config;
 
@@ -167,7 +171,10 @@ public final class ForgemindCommand implements Callable<Integer> {
         // M8.5/M9.4：CLI 观察层 —— 文本增量实时输出 + Tool/SubAgent 调用与结果展示；
         // 同一实例注入 AgentLoop（事件源）与 ForgemindApp（避免重复 final answer、状态摘要）。
         // chat()（非流式）同样兼容（无文本增量，Tool 展示与最终答案不变）。
+        // P2.4：--verbose 仅控制展示层（assistant 中间文本 + 完整 tool output），
+        // 不改变 logger、不改变 AgentLoop、不改变任何 Agent 行为。
         StreamingProgressRenderer renderer = new StreamingProgressRenderer(out);
+        renderer.setVerbose(verbose);
         com.forgemind.core.Agent agent = CliAssembly.buildAgent(
                 loaded.agent(), llmClient, wd, answerer, renderer);
         new ForgemindApp(out, scanner, renderer).run(agent, task, wd);

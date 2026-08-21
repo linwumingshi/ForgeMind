@@ -1,6 +1,7 @@
 package com.forgemind.cli;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.forgemind.core.config.AgentConfig;
@@ -10,6 +11,7 @@ import com.forgemind.llm.fake.FakeLlmClient;
 import com.forgemind.model.AgentResponse;
 import com.forgemind.model.AgentResult;
 import com.forgemind.model.ToolCall;
+import com.forgemind.model.ToolResult;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -80,6 +82,29 @@ class ProgressListenerTest {
         assertEquals(List.of("read_file"), started);
         assertEquals(List.of("read_file"), finishedTools);
         assertEquals(List.of(true), finishedSuccess);
+    }
+
+    @Test
+    void receivesFullToolResultPayloadViaOverload() {
+        // P2.1：AgentLoop 调用 3 参载荷重载 —— 监听器应拿到完整 ToolResult（success/output/error）
+        List<ToolResult> payloads = new ArrayList<>();
+        ProgressListener progress = new ProgressListener() {
+            @Override
+            public void onToolResult(String toolName, ToolResult result) {
+                payloads.add(result);
+            }
+        };
+        FakeLlmClient fake = new FakeLlmClient()
+                .then(AgentResponse.withToolCalls("attempting",
+                        List.of(ToolCall.of("c1", "read_file", Map.of("path", "missing.txt")))))
+                .then(AgentResponse.finalAnswer("recovered"));
+        AgentResult result = buildAgent(fake, progress).run("task");
+        assertTrue(result.finished());
+        assertEquals("recovered", result.finalAnswer());
+        assertEquals(1, payloads.size());
+        assertFalse(payloads.get(0).success(), "缺失文件读取应失败");
+        assertTrue(payloads.get(0).error() != null && !payloads.get(0).error().isBlank(),
+                "失败载荷应携带 error 信息");
     }
 
     @Test

@@ -1,5 +1,7 @@
 package com.forgemind.core.loop;
 
+import com.forgemind.model.ToolResult;
+
 /**
  * 观察/展示层进度监听器（可选能力）。
  *
@@ -19,6 +21,17 @@ public interface ProgressListener {
 
     /** Tool 执行结束（success 为最终结果标记）。 */
     default void onToolResult(String toolName, boolean success) {
+    }
+
+    /**
+     * Tool 执行结束（携带完整 {@link ToolResult} 载荷，供展示层渲染
+     * exitCode / stderr 摘要等失败细节）。
+     *
+     * <p>向后兼容：default 实现委托给 {@link #onToolResult(String, boolean)}，
+     * 仅覆写旧方法的既有实现无需任何改动即可继续工作。</p>
+     */
+    default void onToolResult(String toolName, ToolResult result) {
+        onToolResult(toolName, result.success());
     }
 
     /** M9：SubAgent 编排开始（子 Agent 创建并运行前回调；仅观察）。 */

@@ -24,3 +24,6 @@ Thumbs.db
 
 # Agent tool workspaces
 .workbuddy/
+
+# Run / analysis logs (CLI real-run captures, test logs)
+*.log
